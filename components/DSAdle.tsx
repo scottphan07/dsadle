@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect, KeyboardEvent, CSSProperties } from 'react';
-import { ENTRIES, CODE, TOPS, TIME, SPACE, Entry } from '@/lib/gameData';
+import { fetchNames, fetchDaily, submitGuesses, DailyClues, Reveal } from '@/lib/api';
 
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
+const MAX_GUESSES = 5;
 
 // ─── localStorage helpers ──────────────────────────────────────────────────
 
@@ -15,31 +16,49 @@ function keyFor(offset: number): string {
   return 'dsadle-' + (todayIndex() + offset);
 }
 
-function readGuesses(key: string): Entry[] {
+function readGuesses(key: string): string[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(key);
-    if (!raw) return [];
-    return (JSON.parse(raw) as string[])
-      .map((name) => ENTRIES.find((e) => e.name === name))
-      .filter((e): e is Entry => e !== undefined);
+    return raw ? (JSON.parse(raw) as string[]) : [];
   } catch {
     return [];
   }
 }
 
-function saveGuesses(gs: Entry[], offset: number): void {
+function saveGuesses(names: string[], offset: number): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(keyFor(offset), JSON.stringify(gs.map((g) => g.name)));
+    localStorage.setItem(keyFor(offset), JSON.stringify(names));
+  } catch {}
+}
+
+function readResult(dayIdx: number): 'won' | 'lost' | null {
+  if (typeof window === 'undefined') return null;
+  const raw = localStorage.getItem('dsadle-result-' + dayIdx);
+  return raw === 'won' || raw === 'lost' ? raw : null;
+}
+
+function saveResult(dayIdx: number, result: 'won' | 'lost'): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem('dsadle-result-' + dayIdx, result);
   } catch {}
 }
 
 // ─── Component ────────────────────────────────────────────────────────────
 
 export default function DSAdle() {
-  const [guesses, setGuesses] = useState<Entry[]>([]);
+  const [names, setNames] = useState<string[]>([]);
+  const [daily, setDaily] = useState<DailyClues | null>(null);
+  const [guesses, setGuesses] = useState<string[]>([]);
+  const [results, setResults] = useState<boolean[]>([]);
+  const [reveal, setReveal] = useState<Reveal | null>(null);
   const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
   const [q, setQ] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [modalExpanded, setModalExpanded] = useState(false);
@@ -49,34 +68,67 @@ export default function DSAdle() {
   const [sideView, setSideView] = useState<'main' | 'archive'>('main');
   const [mounted, setMounted] = useState(false);
 
-  // Load saved guesses on mount
+  // Load the day's puzzle (and restore any saved game) whenever the day changes
   useEffect(() => {
     setMounted(true);
-    setGuesses(readGuesses(keyFor(0)));
-  }, []);
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      setDaily(null);
+      setResults([]);
+      setReveal(null);
+      const dayIdx = todayIndex() + offset;
+      const saved = readGuesses(keyFor(offset));
+      setGuesses(saved);
+      try {
+        const [nm, d] = await Promise.all([fetchNames(), fetchDaily(dayIdx)]);
+        if (cancelled) return;
+        setNames(nm);
+        setDaily(d.clues);
+        if (saved.length > 0) {
+          try {
+            const r = await submitGuesses(dayIdx, saved);
+            if (cancelled) return;
+            setResults(r.results);
+            setReveal(r.reveal);
+          } catch {
+            // Saved guesses reference names no longer in the question bank
+            if (cancelled) return;
+            setGuesses([]);
+            saveGuesses([], offset);
+          }
+        }
+      } catch {
+        if (!cancelled) setError('Could not reach the DSAdle server. Is the backend running?');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [offset, retryTick]);
 
   // ── Derived values ────────────────────────────────────────────────────────
 
   const dayIdx = todayIndex() + offset;
-  const n = ENTRIES.length;
-  const answer = ENTRIES[((dayIdx % n) + n) % n];
-  const won = guesses.some((g) => g.name === answer.name);
-  const isOver = guesses.length >= 5 || won;
-  const wrong = guesses.filter((g) => g.name !== answer.name);
-  const revealed = isOver ? 5 : Math.min(5, 1 + wrong.length);
-  const attemptsLeft = Math.max(0, 5 - guesses.length);
+  const won = results.some(Boolean);
+  const isOver = won || guesses.length >= MAX_GUESSES;
+  const wrong = guesses.filter((_, i) => results[i] === false);
+  const revealed = loading || !daily ? 0 : isOver ? 5 : Math.min(5, 1 + wrong.length);
+  const attemptsLeft = Math.max(0, MAX_GUESSES - guesses.length);
   const dateLabel = new Date(dayIdx * 86400000).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
   });
-  const codeSnippet = CODE[answer.name] ?? '# implementation coming soon';
+  const codeSnippet = daily?.code ?? '# implementation coming soon';
 
   // ── Clues ─────────────────────────────────────────────────────────────────
 
   const clues = [
-    { value: answer.cat === 0 ? 'Data Structure' : 'Algorithm', isCode: false },
-    { value: answer.use, isCode: false },
-    { value: (TOPS[answer.name] ?? 'Running time') + ': ' + (answer.t === 0 ? 'O(1)' : TIME[answer.t]), isCode: false },
-    { value: 'Uses ' + SPACE[answer.s] + ' space', isCode: false },
+    { value: daily?.category ?? '', isCode: false },
+    { value: daily?.use_case ?? '', isCode: false },
+    { value: daily?.time_clue ?? '', isCode: false },
+    { value: daily?.space_clue ?? '', isCode: false },
     { value: '', isCode: true },
   ].map((c, i) => ({
     ...c,
@@ -86,44 +138,56 @@ export default function DSAdle() {
 
   // ── Suggestions ───────────────────────────────────────────────────────────
 
-  function getSuggestions(): Entry[] {
+  function getSuggestions(): string[] {
     const trimmed = q.trim().toLowerCase();
     if (!trimmed) return [];
-    const used = new Set(guesses.map((g) => g.name));
-    return ENTRIES.filter(
-      (e) => !used.has(e.name) && e.name.toLowerCase().includes(trimmed)
+    const used = new Set(guesses);
+    return names.filter(
+      (n) => !used.has(n) && n.toLowerCase().includes(trimmed)
     ).slice(0, 6);
   }
 
   const suggList = getSuggestions();
   const hiClamped = Math.min(hi, Math.max(0, suggList.length - 1));
-  const suggestions = suggList.map((e, i) => ({
-    name: e.name,
+  const suggestions = suggList.map((name, i) => ({
+    name,
     bg: i === hiClamped ? '#eaeaea' : '#ffffff',
   }));
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
-  function submit(name: string) {
-    if (isOver) return;
-    const entry = ENTRIES.find((e) => e.name === name);
-    if (!entry || guesses.some((g) => g.name === name)) return;
-    const next = [...guesses, entry];
-    setGuesses(next);
-    saveGuesses(next, offset);
+  async function submit(name: string) {
+    if (isOver || submitting) return;
+    if (!names.includes(name) || guesses.includes(name)) return;
+    const next = [...guesses, name];
+    setSubmitting(true);
+    try {
+      const r = await submitGuesses(dayIdx, next);
+      setGuesses(next);
+      setResults(r.results);
+      setReveal(r.reveal);
+      saveGuesses(next, offset);
+      if (r.game_over) saveResult(dayIdx, r.won ? 'won' : 'lost');
+      setError(null);
+      setQ('');
+      setDropdownOpen(false);
+      setHi(0);
+    } catch {
+      setError('Guess failed — check that the backend is running, then try again.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   function submitGuess() {
     const trimmed = q.trim();
     if (!trimmed) return;
-    const used = new Set(guesses.map((g) => g.name));
+    const used = new Set(guesses);
     const target =
-      ENTRIES.find((e) => e.name.toLowerCase() === trimmed.toLowerCase() && !used.has(e.name)) ??
-      ENTRIES.find((e) => !used.has(e.name) && e.name.toLowerCase().includes(trimmed.toLowerCase()));
+      names.find((n) => n.toLowerCase() === trimmed.toLowerCase() && !used.has(n)) ??
+      names.find((n) => !used.has(n) && n.toLowerCase().includes(trimmed.toLowerCase()));
     if (!target) return;
-    submit(target.name);
-    setQ('');
-    setDropdownOpen(false);
+    submit(target);
   }
 
   function fill(name: string) {
@@ -143,10 +207,7 @@ export default function DSAdle() {
     if (e.key === 'Enter') {
       e.preventDefault();
       if (listOpen) {
-        submit(list[hiClamped].name);
-        setQ('');
-        setDropdownOpen(false);
-        setHi(0);
+        submit(list[hiClamped]);
       } else {
         submitGuess();
       }
@@ -154,17 +215,13 @@ export default function DSAdle() {
   }
 
   function navigate(delta: number) {
-    const next = Math.min(0, offset + delta);
-    setOffset(next);
-    setGuesses(readGuesses(keyFor(next)));
+    setOffset((prev) => Math.min(0, prev + delta));
     setQ('');
     setDropdownOpen(false);
   }
 
   function navigateTo(target: number) {
-    const next = Math.min(0, target);
-    setOffset(next);
-    setGuesses(readGuesses(keyFor(next)));
+    setOffset(Math.min(0, target));
     setQ('');
     setDropdownOpen(false);
   }
@@ -185,13 +242,11 @@ export default function DSAdle() {
     ? Array.from({ length: 30 }, (_, i) => {
         const dayOff = -(i + 1);
         const dayIdx2 = todayIndex() + dayOff;
-        const eLen = ENTRIES.length;
-        const dayEntry = ENTRIES[((dayIdx2 % eLen) + eLen) % eLen];
         const label = new Date(dayIdx2 * 86400000).toLocaleDateString('en-US', {
           month: 'short', day: 'numeric', year: 'numeric',
         });
         const saved = readGuesses(keyFor(dayOff));
-        const solved = saved.some((g) => g.name === dayEntry.name);
+        const solved = readResult(dayIdx2) === 'won';
         const attempted = saved.length > 0;
         return {
           label,
@@ -254,6 +309,17 @@ export default function DSAdle() {
           Guess the data structure or algorithm.<br />A new clue unlocks with every guess.
         </div>
 
+        {/* Backend error */}
+        {error && (
+          <div style={{ textAlign: 'center', fontSize: 13, color: '#c14b3e', border: '2px solid #c14b3e', borderRadius: 3, padding: '12px 16px', marginBottom: 18, lineHeight: 1.4 }}>
+            {error}
+            <button
+              onClick={() => setRetryTick((t) => t + 1)}
+              style={{ display: 'block', margin: '10px auto 0', fontSize: 12, fontWeight: 700, color: '#fff', background: '#c14b3e', border: 'none', borderRadius: 3, padding: '7px 14px', cursor: 'pointer' }}
+            >Retry</button>
+          </div>
+        )}
+
         {/* Clue cards */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
           {clues.map((c, i) => (
@@ -278,9 +344,9 @@ export default function DSAdle() {
           <div style={{ marginBottom: 18 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: '#787c7e', marginBottom: 8 }}>Wrong guesses</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {wrong.map((g) => (
-                <span key={g.name} style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: '#c14b3e', borderRadius: 2, padding: '7px 12px' }}>
-                  ✕ {g.name}
+              {wrong.map((name) => (
+                <span key={name} style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: '#c14b3e', borderRadius: 2, padding: '7px 12px' }}>
+                  ✕ {name}
                 </span>
               ))}
             </div>
@@ -288,10 +354,10 @@ export default function DSAdle() {
         )}
 
         {/* Game over */}
-        {isOver && (
+        {isOver && reveal && (
           <div style={{ textAlign: 'center', padding: '20px 16px', border: '2px solid #d3d6da', borderRadius: 3, marginBottom: 18 }}>
-            <div style={{ fontSize: 24, fontWeight: 800, color: '#1a1a1b' }}>{answer.name}</div>
-            <div style={{ fontSize: 13, color: '#444', marginTop: 8, lineHeight: 1.5 }}>{answer.desc}</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: '#1a1a1b' }}>{reveal.name}</div>
+            <div style={{ fontSize: 13, color: '#444', marginTop: 8, lineHeight: 1.5 }}>{reveal.description}</div>
             <button
               onClick={() => setModalOpen(true)}
               style={{ marginTop: 14, fontSize: 13, fontWeight: 700, color: '#fff', background: '#1a1a1b', border: 'none', borderRadius: 3, padding: '10px 18px', cursor: 'pointer' }}
@@ -307,7 +373,8 @@ export default function DSAdle() {
                 value={q}
                 onChange={(e) => { setQ(e.target.value); setDropdownOpen(true); setHi(0); }}
                 onKeyDown={onKeyDown}
-                placeholder="Type a structure or algorithm"
+                disabled={loading || !daily}
+                placeholder={loading ? 'Loading…' : 'Type a structure or algorithm'}
                 style={{ width: '100%', padding: '13px 14px', border: '2px solid #878a8c', borderRadius: 3, fontSize: 14, outline: 'none', fontFamily: FONT }}
               />
               {dropdownOpen && suggestions.length > 0 && (
@@ -325,8 +392,9 @@ export default function DSAdle() {
             </div>
             <button
               onClick={submitGuess}
-              style={{ flexShrink: 0, padding: '0 22px', background: '#1a1a1b', color: '#fff', border: 'none', borderRadius: 3, fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer' }}
-            >Guess</button>
+              disabled={submitting || loading || !daily}
+              style={{ flexShrink: 0, padding: '0 22px', background: '#1a1a1b', color: '#fff', border: 'none', borderRadius: 3, fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', opacity: submitting ? 0.6 : 1 }}
+            >{submitting ? '…' : 'Guess'}</button>
           </div>
         )}
       </div>
