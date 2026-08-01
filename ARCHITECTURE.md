@@ -136,11 +136,25 @@ styled with inline styles (Tailwind is imported in `globals.css` but the
 component itself uses plain inline `style={{...}}` objects, not utility
 classes).
 
+**Theming.** Colors are not hard-coded in those inline styles — they read CSS
+variables (`style={{ color: 'var(--text)' }}`) defined in `globals.css` under
+`:root` (light) and `[data-theme="dark"]`. Switching themes flips the
+`data-theme` attribute on `<html>`, so the whole tree recolors through the
+cascade with no React re-render. An inline script in `layout.tsx` sets that
+attribute before first paint (stored `dsadle-theme` wins, otherwise
+`prefers-color-scheme`), which is what keeps the page from flashing.
+
+Two areas stay deliberately un-themed and keep literal hex values: the
+macOS-style code modal, which is a fake dark editor window in both themes, and
+the traffic-light colors. New color work should add a token rather than a
+literal — the one thing to watch is that filled buttons use the `--btn-bg` /
+`--btn-fg` pair, which inverts between themes, not `--text` / `--bg`.
+
 ### File map
 
 | File | Role |
 |---|---|
-| `app/layout.tsx` | Root HTML shell + page `<title>`/meta description |
+| `app/layout.tsx` | Root HTML shell + page `<title>`/meta description + the pre-hydration theme script |
 | `app/page.tsx` | The route `/` — dynamically imports the game component with SSR disabled |
 | `components/DSAdle.tsx` | **The entire game UI and client-side logic** (~470 lines, one big component) |
 | `lib/api.ts` | Thin typed `fetch()` wrapper around the 3 backend game endpoints |

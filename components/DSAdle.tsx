@@ -14,7 +14,7 @@ const DATE_FMT: Intl.DateTimeFormatOptions = {
 };
 
 const calNavStyle: CSSProperties = {
-  border: 'none', background: 'none', cursor: 'pointer', color: '#787c7e',
+  border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-muted)',
   fontSize: 16, fontWeight: 700, lineHeight: 1, padding: '2px 8px',
 };
 
@@ -110,6 +110,26 @@ function saveResult(dayIdx: number, result: 'won' | 'lost'): void {
   } catch {}
 }
 
+// ─── Theme ─────────────────────────────────────────────────────────────────
+
+type Theme = 'light' | 'dark';
+
+// Reads the DOM attribute rather than localStorage: the inline script in
+// layout.tsx has already resolved stored-choice vs. OS preference before first
+// paint, so the attribute is the one value that can't disagree with what the
+// user is looking at.
+function readTheme(): Theme {
+  if (typeof document === 'undefined') return 'light';
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+}
+
+function saveTheme(t: Theme): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem('dsadle-theme', t);
+  } catch {}
+}
+
 // 'lost' also covers games left in progress — anything attempted but not won
 function dayStatus(dayIdx: number): 'won' | 'lost' | null {
   if (readResult(dayIdx) === 'won') return 'won';
@@ -156,6 +176,54 @@ function TrafficLight({ color, glyphColor, hoverClass, title, onClick, visible, 
         {children}
       </motion.svg>
     </span>
+  );
+}
+
+// ─── Theme switch ──────────────────────────────────────────────────────────
+
+const TRACK_W = 44, TRACK_H = 26, KNOB = 22, PAD = 2;
+const KNOB_TRAVEL = TRACK_W - PAD * 2 - KNOB;
+// Literal, not tokens: Motion can't interpolate a CSS variable, and "on" always
+// means dark mode, so this pair never varies by theme.
+const TRACK_OFF = '#d3d6da', TRACK_ON = '#34c759';
+// The pressable feel, damped a little harder so the knob settles instead of
+// overshooting past the end of the track.
+const SWITCH_SPRING = { type: 'spring', stiffness: 500, damping: 32 } as const;
+
+// iOS-style toggle. The knob animates `x` rather than `layout` — this lives
+// inside the sidebar, which is itself a motion.div translating on x, and layout
+// projection inside a transforming ancestor is what makes knobs jitter.
+function Switch({ checked, onChange, label, reduceMotion }: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  reduceMotion: boolean;
+}) {
+  return (
+    <motion.button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      whileTap={{ scale: 0.94 }}
+      animate={{ backgroundColor: checked ? TRACK_ON : TRACK_OFF }}
+      transition={reduceMotion ? INSTANT : { backgroundColor: { duration: 0.2 }, default: SWITCH_SPRING }}
+      style={{
+        width: TRACK_W, height: TRACK_H, borderRadius: TRACK_H / 2, border: 'none',
+        padding: PAD, flexShrink: 0, cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
+      }}
+    >
+      <motion.span
+        animate={{ x: checked ? KNOB_TRAVEL : 0 }}
+        transition={reduceMotion ? INSTANT : SWITCH_SPRING}
+        style={{
+          width: KNOB, height: KNOB, borderRadius: '50%', background: '#fff',
+          boxShadow: '0 1px 3px rgba(0,0,0,.3), 0 0 0 .5px rgba(0,0,0,.06)',
+        }}
+      />
+    </motion.button>
   );
 }
 
@@ -231,6 +299,10 @@ export default function DSAdle() {
   const [calOpen, setCalOpen] = useState(false);
   // Set on mount rather than at declaration — todayIndex() is client-only
   const [calMonth, setCalMonth] = useState<{ y: number; m: number } | null>(null);
+  // Safe as a lazy initializer with no mount gate: page.tsx loads this
+  // component with ssr:false, so the first render already follows the inline
+  // theme script.
+  const [theme, setTheme] = useState<Theme>(readTheme);
 
   const reduceMotion = useReducedMotion();
 
@@ -322,7 +394,7 @@ export default function DSAdle() {
   const hiClamped = Math.min(hi, Math.max(0, suggList.length - 1));
   const suggestions = suggList.map((name, i) => ({
     name,
-    bg: i === hiClamped ? '#eaeaea' : '#ffffff',
+    bg: i === hiClamped ? 'var(--surface-hi)' : 'var(--surface)',
   }));
 
   // ── Actions ───────────────────────────────────────────────────────────────
@@ -408,6 +480,14 @@ export default function DSAdle() {
     setSideOpen(false);
   }
 
+  // The attribute does the recolouring via the cascade; `theme` state exists
+  // only so the switch knows which side it's on.
+  function applyTheme(next: Theme) {
+    setTheme(next);
+    document.documentElement.setAttribute('data-theme', next);
+    saveTheme(next);
+  }
+
   // `mode` picks the backdrop fade: red closes instantly, yellow lingers so the
   // scrim doesn't pop while the window is still travelling.
   function closeModal(mode: 'instant' | 'minimize' = 'instant') {
@@ -471,7 +551,7 @@ export default function DSAdle() {
             dayIdx: d,
             label: labelForDay(d),
             dot: status === 'won' ? '✓' : status === 'lost' ? '✗' : '',
-            dotColor: status === 'won' ? '#538d4e' : '#c14b3e',
+            dotColor: status === 'won' ? 'var(--accent-won)' : 'var(--accent-lost)',
           };
         })
       : []),
@@ -554,19 +634,19 @@ export default function DSAdle() {
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ minHeight: '100vh', background: '#ffffff', fontFamily: FONT, color: '#1a1a1b' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', fontFamily: FONT, color: 'var(--text)' }}>
 
       {/* ── Header ── */}
-      <div style={{ borderBottom: '1px solid #d3d6da' }}>
+      <div style={{ borderBottom: '1px solid var(--border)' }}>
         <div style={{ maxWidth: 520, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 16px' }}>
           <motion.span
             {...pressable}
             onClick={() => { setSideOpen(true); setSideView('main'); }}
-            style={{ width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#787c7e', fontSize: 21, cursor: 'pointer', lineHeight: '1' }}
+            style={{ width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 21, cursor: 'pointer', lineHeight: '1' }}
           >☰</motion.span>
           <div
             onClick={goHome}
-            style={{ fontSize: 30, fontWeight: 800, letterSpacing: '.16em', textTransform: 'uppercase', color: '#1a1a1b', cursor: 'pointer' }}
+            style={{ fontSize: 30, fontWeight: 800, letterSpacing: '.16em', textTransform: 'uppercase', color: 'var(--text)', cursor: 'pointer' }}
           >DSAdle</div>
           <span style={{ width: 26, height: 26 }} />
         </div>
@@ -576,25 +656,25 @@ export default function DSAdle() {
       <div style={{ maxWidth: 520, margin: '0 auto', padding: '18px 16px 56px', boxSizing: 'border-box' }}>
 
         {/* Nav row */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, color: '#787c7e', marginBottom: 8 }}>
-          <motion.button {...pressable} onClick={() => navigate(-1)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#787c7e', fontSize: 12, fontWeight: 600, padding: 4 }}>‹ Prev</motion.button>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+          <motion.button {...pressable} onClick={() => navigate(-1)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 12, fontWeight: 600, padding: 4 }}>‹ Prev</motion.button>
           <div style={{ fontWeight: 600 }}>{dateLabel} · {attemptsLeft} guesses left</div>
-          <motion.button {...pressable} onClick={() => navigate(1)} disabled={offset >= 0} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#787c7e', fontSize: 12, fontWeight: 600, padding: 4 }}>Next ›</motion.button>
+          <motion.button {...pressable} onClick={() => navigate(1)} disabled={offset >= 0} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 12, fontWeight: 600, padding: 4 }}>Next ›</motion.button>
         </div>
 
         {/* Subtitle */}
-        <div style={{ textAlign: 'center', fontSize: 13, color: '#787c7e', marginBottom: 18, lineHeight: 1.4 }}>
+        <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--text-muted)', marginBottom: 18, lineHeight: 1.4 }}>
           Guess the data structure or algorithm.<br />A new clue unlocks with every guess.
         </div>
 
         {/* Backend error */}
         {error && (
-          <div style={{ textAlign: 'center', fontSize: 13, color: '#c14b3e', border: '2px solid #c14b3e', borderRadius: 3, padding: '12px 16px', marginBottom: 18, lineHeight: 1.4 }}>
+          <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--accent-lost)', border: '2px solid var(--accent-lost)', borderRadius: 3, padding: '12px 16px', marginBottom: 18, lineHeight: 1.4 }}>
             {error}
             <motion.button
               {...pressable}
               onClick={() => setRetryTick((t) => t + 1)}
-              style={{ display: 'block', margin: '10px auto 0', fontSize: 12, fontWeight: 700, color: '#fff', background: '#c14b3e', border: 'none', borderRadius: 3, padding: '7px 14px', cursor: 'pointer' }}
+              style={{ display: 'block', margin: '10px auto 0', fontSize: 12, fontWeight: 700, color: 'var(--on-accent)', background: 'var(--accent-lost)', border: 'none', borderRadius: 3, padding: '7px 14px', cursor: 'pointer' }}
             >Retry</motion.button>
           </div>
         )}
@@ -613,7 +693,7 @@ export default function DSAdle() {
                 style={{ position: 'relative', transformStyle: 'preserve-3d' }}
               >
                 {/* Front face — in normal flow, so it defines the card height */}
-                <div style={{ position: 'relative', minHeight: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '10px 16px', background: '#fff', border: '2px solid #878a8c', color: '#1a1a1b', fontWeight: 700, fontSize: 15, borderRadius: 2, lineHeight: 1.3, backfaceVisibility: 'hidden' }}>
+                <div style={{ position: 'relative', minHeight: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '10px 16px', background: 'var(--surface)', border: '2px solid var(--border-strong)', color: 'var(--text)', fontWeight: 700, fontSize: 15, borderRadius: 2, lineHeight: 1.3, backfaceVisibility: 'hidden' }}>
                   {!c.isCode && <span>{c.value}</span>}
                   {c.isCode && (
                     <motion.div
@@ -622,12 +702,12 @@ export default function DSAdle() {
                       style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, width: '100%', cursor: 'pointer' }}
                     >
                       <span>View implementation</span>
-                      <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: '#787c7e' }}>⟨ ⟩</span>
+                      <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: 'var(--text-muted)' }}>⟨ ⟩</span>
                     </motion.div>
                   )}
                 </div>
                 {/* Back face — the lid, pre-rotated so it reads upright at 180deg */}
-                <div style={{ position: 'absolute', inset: 0, border: '2px solid #d3d6da', background: '#fafafa', borderRadius: 2, backfaceVisibility: 'hidden', transform: 'rotateX(180deg)', pointerEvents: c.open ? 'none' : 'auto' }} />
+                <div style={{ position: 'absolute', inset: 0, border: '2px solid var(--border)', background: 'var(--surface-alt)', borderRadius: 2, backfaceVisibility: 'hidden', transform: 'rotateX(180deg)', pointerEvents: c.open ? 'none' : 'auto' }} />
               </motion.div>
             </div>
           ))}
@@ -636,7 +716,7 @@ export default function DSAdle() {
         {/* Wrong guesses */}
         {wrong.length > 0 && (
           <div style={{ marginBottom: 18 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: '#787c7e', marginBottom: 8 }}>Wrong guesses</div>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--text-muted)', marginBottom: 8 }}>Wrong guesses</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               <AnimatePresence initial={false}>
                 {wrong.map((name) => (
@@ -646,7 +726,7 @@ export default function DSAdle() {
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.8 }}
                     transition={reduceMotion ? INSTANT : SPRING}
-                    style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: '#c14b3e', borderRadius: 2, padding: '7px 12px' }}
+                    style={{ fontSize: 12, fontWeight: 700, color: 'var(--on-accent)', background: 'var(--accent-lost)', borderRadius: 2, padding: '7px 12px' }}
                   >
                     ✕ {name}
                   </motion.span>
@@ -662,15 +742,15 @@ export default function DSAdle() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={reduceMotion ? INSTANT : EASE_OUT}
-            style={{ textAlign: 'center', padding: '20px 16px', border: '2px solid #d3d6da', borderRadius: 3, marginBottom: 18 }}
+            style={{ textAlign: 'center', padding: '20px 16px', border: '2px solid var(--border)', borderRadius: 3, marginBottom: 18 }}
           >
-            <div style={{ fontSize: 24, fontWeight: 800, color: '#1a1a1b' }}>{reveal.name}</div>
-            <div style={{ fontSize: 13, color: '#444', marginTop: 8, lineHeight: 1.5 }}>{reveal.description}</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text)' }}>{reveal.name}</div>
+            <div style={{ fontSize: 13, color: 'var(--text-soft)', marginTop: 8, lineHeight: 1.5 }}>{reveal.description}</div>
             <motion.button
               {...pressable}
               ref={overTriggerRef}
               onClick={() => openModal('over')}
-              style={{ marginTop: 14, fontSize: 13, fontWeight: 700, color: '#fff', background: '#1a1a1b', border: 'none', borderRadius: 3, padding: '10px 18px', cursor: 'pointer' }}
+              style={{ marginTop: 14, fontSize: 13, fontWeight: 700, color: 'var(--btn-fg)', background: 'var(--btn-bg)', border: 'none', borderRadius: 3, padding: '10px 18px', cursor: 'pointer' }}
             >⟨ ⟩ View implementation</motion.button>
           </motion.div>
         )}
@@ -685,7 +765,7 @@ export default function DSAdle() {
                 onKeyDown={onKeyDown}
                 disabled={loading || !daily}
                 placeholder={loading ? 'Loading…' : 'Type a structure or algorithm'}
-                style={{ width: '100%', padding: '13px 14px', border: '2px solid #878a8c', borderRadius: 3, fontSize: 14, outline: 'none', fontFamily: FONT }}
+                style={{ width: '100%', padding: '13px 14px', border: '2px solid var(--border-strong)', borderRadius: 3, fontSize: 14, fontFamily: FONT, background: 'var(--surface)', color: 'var(--text)' }}
               />
               <AnimatePresence>
                 {dropdownOpen && suggestions.length > 0 && (
@@ -694,7 +774,7 @@ export default function DSAdle() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 4 }}
                     transition={reduceMotion ? INSTANT : { duration: 0.15 }}
-                    style={{ position: 'absolute', bottom: 'calc(100% + 5px)', left: 0, right: 0, background: '#fff', border: '1px solid #878a8c', borderRadius: 3, boxShadow: '0 -8px 22px rgba(0,0,0,.16)', zIndex: 5, overflow: 'hidden' }}
+                    style={{ position: 'absolute', bottom: 'calc(100% + 5px)', left: 0, right: 0, background: 'var(--surface)', border: '1px solid var(--border-strong)', borderRadius: 3, boxShadow: 'var(--shadow-drop)', zIndex: 5, overflow: 'hidden' }}
                   >
                     {suggestions.map((s) => (
                       <motion.div
@@ -702,7 +782,7 @@ export default function DSAdle() {
                         {...pressableRow}
                         onClick={() => fill(s.name)}
                         className="dsadle-hover-bg"
-                        style={{ padding: '12px 14px', fontSize: 14, fontWeight: 600, cursor: 'pointer', borderTop: '1px solid #eee', background: s.bg }}
+                        style={{ padding: '12px 14px', fontSize: 14, fontWeight: 600, cursor: 'pointer', borderTop: '1px solid var(--divider-soft)', background: s.bg }}
                       >{s.name}</motion.div>
                     ))}
                   </motion.div>
@@ -714,7 +794,7 @@ export default function DSAdle() {
               animate={{ opacity: submitting ? 0.6 : 1 }}
               onClick={submitGuess}
               disabled={submitting || loading || !daily}
-              style={{ flexShrink: 0, padding: '0 22px', background: '#1a1a1b', color: '#fff', border: 'none', borderRadius: 3, fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer' }}
+              style={{ flexShrink: 0, padding: '0 22px', background: 'var(--btn-bg)', color: 'var(--btn-fg)', border: 'none', borderRadius: 3, fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer' }}
             >{submitting ? '…' : 'Guess'}</motion.button>
           </div>
         )}
@@ -731,7 +811,7 @@ export default function DSAdle() {
             animate="visible"
             exit="exit"
             onClick={() => closeModal('instant')}
-            style={{ position: 'fixed', inset: 0, background: 'rgba(28,27,24,.55)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }}
+            style={{ position: 'fixed', inset: 0, background: 'var(--scrim-modal)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }}
           >
             {/* Centring wrapper. It deliberately has no enter/exit animation of
                 its own — the scaling copy is the transition in both directions,
@@ -799,7 +879,7 @@ export default function DSAdle() {
               exit={{ opacity: 0 }}
               transition={reduceMotion ? INSTANT : EASE_OUT}
               onClick={() => setSideOpen(false)}
-              style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.35)' }}
+              style={{ position: 'absolute', inset: 0, background: 'var(--scrim)' }}
             />
             <motion.div
               initial={{ x: -280 }}
@@ -807,13 +887,13 @@ export default function DSAdle() {
               exit={{ x: -280 }}
               transition={reduceMotion ? INSTANT : EASE_OUT}
               onClick={(e) => e.stopPropagation()}
-              style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 280, background: '#fff', boxShadow: '4px 0 24px rgba(0,0,0,.14)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+              style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 280, background: 'var(--surface)', boxShadow: 'var(--shadow-side)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
             >
 
               {/* Sidebar header */}
-              <div style={{ padding: '14px 20px', borderBottom: '1px solid #d3d6da', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-                <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '.12em', textTransform: 'uppercase', color: '#1a1a1b' }}>DSAdle</div>
-                <motion.button {...pressable} onClick={() => setSideOpen(false)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#787c7e', padding: 0, lineHeight: '1' }}>×</motion.button>
+              <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+                <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--text)' }}>DSAdle</div>
+                <motion.button {...pressable} onClick={() => setSideOpen(false)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-muted)', padding: 0, lineHeight: '1' }}>×</motion.button>
               </div>
 
               {/* Panes — main slides left as archive slides in from the right */}
@@ -827,13 +907,13 @@ export default function DSAdle() {
                     transition={reduceMotion ? INSTANT : { duration: 0.2, ease: 'easeOut' }}
                     style={{ flex: 1, overflowY: 'auto' }}
                   >
-                    <motion.div {...pressableRow} onClick={goHome} className="dsadle-hover-bg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', fontSize: 15, fontWeight: 600, color: '#1a1a1b' }}>
+                    <motion.div {...pressableRow} onClick={goHome} className="dsadle-hover-bg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', cursor: 'pointer', borderBottom: '1px solid var(--divider)', fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
                       <span>Today&apos;s Puzzle</span>
-                      <span style={{ color: '#787c7e' }}>›</span>
+                      <span style={{ color: 'var(--text-muted)' }}>›</span>
                     </motion.div>
-                    <motion.div {...pressableRow} onClick={() => setSideView('archive')} className="dsadle-hover-bg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', fontSize: 15, fontWeight: 600, color: '#1a1a1b' }}>
+                    <motion.div {...pressableRow} onClick={() => setSideView('archive')} className="dsadle-hover-bg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', cursor: 'pointer', borderBottom: '1px solid var(--divider)', fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
                       <span>Archive</span>
-                      <span style={{ color: '#787c7e' }}>›</span>
+                      <span style={{ color: 'var(--text-muted)' }}>›</span>
                     </motion.div>
                   </motion.div>
                 ) : (
@@ -848,23 +928,23 @@ export default function DSAdle() {
                     {/* Two separate controls in one bar: back on the left,
                         calendar toggle on the right. Splitting them keeps the
                         icon's click from bubbling into the back navigation. */}
-                    <div style={{ flexShrink: 0, borderBottom: '1px solid #d3d6da', display: 'flex', alignItems: 'stretch' }}>
+                    <div style={{ flexShrink: 0, borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'stretch' }}>
                       <motion.div
                         {...pressableRow}
                         onClick={() => setSideView('main')}
                         className="dsadle-hover-bg"
                         style={{ flex: 1, padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
                       >
-                        <span style={{ color: '#787c7e' }}>‹</span>
-                        <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: '#787c7e' }}>Archive</span>
+                        <span style={{ color: 'var(--text-muted)' }}>‹</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)' }}>Archive</span>
                       </motion.div>
                       <motion.button
                         {...pressable}
                         onClick={() => setCalOpen((v) => !v)}
                         title="Jump to date"
                         aria-label="Jump to date"
-                        animate={{ color: calOpen ? '#1a1a1b' : '#787c7e' }}
-                        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '0 20px', display: 'flex', alignItems: 'center' }}
+                        animate={{ opacity: calOpen ? 1 : 0.75 }}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '0 20px', display: 'flex', alignItems: 'center', color: calOpen ? 'var(--text)' : 'var(--text-muted)' }}
                       >
                         <svg viewBox="0 0 16 16" width={15} height={15} style={{ display: 'block' }}>
                           <circle cx="7" cy="7" r="4.6" stroke="currentColor" strokeWidth="1.6" fill="none" />
@@ -882,19 +962,19 @@ export default function DSAdle() {
                           animate={{ height: 'auto', opacity: 1 }}
                           exit={{ height: 0, opacity: 0 }}
                           transition={reduceMotion ? INSTANT : EASE_OUT}
-                          style={{ flexShrink: 0, overflow: 'hidden', borderBottom: '1px solid #d3d6da' }}
+                          style={{ flexShrink: 0, overflow: 'hidden', borderBottom: '1px solid var(--border)' }}
                         >
                           <div style={{ padding: '10px 20px 14px' }}>
                             {/* Month nav */}
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                               <motion.button {...pressable} onClick={() => shiftMonth(-1)} style={calNavStyle}>‹</motion.button>
-                              <div style={{ fontSize: 12, fontWeight: 700, color: '#1a1a1b' }}>{calendar.label}</div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>{calendar.label}</div>
                               <motion.button {...pressable} onClick={() => shiftMonth(1)} disabled={calendar.atCurrentMonth} style={calNavStyle}>›</motion.button>
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
                               {WEEKDAYS.map((w, i) => (
-                                <div key={i} style={{ textAlign: 'center', fontSize: 10, fontWeight: 700, color: '#787c7e', paddingBottom: 4 }}>{w}</div>
+                                <div key={i} style={{ textAlign: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', paddingBottom: 4 }}>{w}</div>
                               ))}
                             </div>
 
@@ -918,11 +998,11 @@ export default function DSAdle() {
                                       disabled={cell.future}
                                       title={labelForDay(cell.dayIdx)}
                                       style={{
-                                        aspectRatio: '1', border: selected ? '2px solid #1a1a1b' : cell.isToday ? '1px solid #878a8c' : '1px solid transparent',
+                                        aspectRatio: '1', border: selected ? '2px solid var(--text)' : cell.isToday ? '1px solid var(--border-strong)' : '1px solid transparent',
                                         borderRadius: 3, fontSize: 11, fontWeight: 700, fontFamily: FONT, padding: 0,
                                         cursor: cell.future ? 'default' : 'pointer',
-                                        background: cell.status === 'won' ? '#538d4e' : cell.status === 'lost' ? '#c14b3e' : 'transparent',
-                                        color: cell.status ? '#fff' : '#1a1a1b',
+                                        background: cell.status === 'won' ? 'var(--accent-won)' : cell.status === 'lost' ? 'var(--accent-lost)' : 'transparent',
+                                        color: cell.status ? 'var(--on-accent)' : 'var(--text)',
                                       }}
                                     >{cell.date}</motion.button>
                                   );
@@ -936,8 +1016,8 @@ export default function DSAdle() {
 
                     <div style={{ flex: 1, overflowY: 'auto' }}>
                       {archiveDays.map((day) => (
-                        <motion.div key={day.dayIdx} {...pressableRow} onClick={() => goToDay(day.dayIdx)} className="dsadle-hover-bg" style={{ padding: '13px 20px', borderBottom: '1px solid #f0f0f0', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1b' }}>{day.label}</div>
+                        <motion.div key={day.dayIdx} {...pressableRow} onClick={() => goToDay(day.dayIdx)} className="dsadle-hover-bg" style={{ padding: '13px 20px', borderBottom: '1px solid var(--divider)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{day.label}</div>
                           <span style={{ fontSize: 14, fontWeight: 700, color: day.dotColor }}>{day.dot}</span>
                         </motion.div>
                       ))}
@@ -945,6 +1025,21 @@ export default function DSAdle() {
                   </motion.div>
                 )}
               </AnimatePresence>
+
+              {/* Pinned footer — sits outside the pane swap, so it stays put
+                  in both the main and archive views */}
+              <div style={{
+                flexShrink: 0, borderTop: '1px solid var(--border)', padding: '14px 20px',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+              }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>Dark mode</span>
+                <Switch
+                  checked={theme === 'dark'}
+                  onChange={(next) => applyTheme(next ? 'dark' : 'light')}
+                  label="Dark mode"
+                  reduceMotion={!!reduceMotion}
+                />
+              </div>
             </motion.div>
           </motion.div>
         )}

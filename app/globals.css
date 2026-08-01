@@ -1,22 +1,111 @@
 @import "tailwindcss";
 
+/* ── Theme tokens ──────────────────────────────────────────────────────────
+   :root is light; [data-theme="dark"] on <html> overrides. There is no
+   prefers-color-scheme block here on purpose — the pre-hydration script in
+   layout.tsx always writes an explicit attribute, so the attribute is the
+   single source of truth. */
+
+:root {
+  color-scheme: light;
+
+  /* surfaces */
+  --bg:            #ffffff;
+  --surface:       #ffffff;   /* card front, dropdown, sidebar panel */
+  --surface-alt:   #fafafa;   /* card back / lid */
+  --surface-hi:    #eaeaea;   /* keyboard-highlighted suggestion */
+  --row-hover:     #f4f4f4;
+
+  /* ink */
+  --text:          #1a1a1b;
+  --text-muted:    #787c7e;
+  --text-soft:     #444444;
+
+  /* lines */
+  --border:        #d3d6da;   /* 1px hairlines */
+  --border-strong: #878a8c;   /* 2px card + input border */
+  --divider:       #f0f0f0;   /* sidebar row separators */
+  --divider-soft:  #eeeeee;   /* suggestion row separators */
+
+  /* accents */
+  --accent-won:    #538d4e;
+  --accent-lost:   #c14b3e;
+  --on-accent:     #ffffff;
+
+  /* Filled buttons. Kept separate from --text/--bg because this pair inverts
+     between themes and the ink pair does not. */
+  --btn-bg:        #1a1a1b;
+  --btn-fg:        #ffffff;
+
+  /* overlays */
+  --scrim:         rgba(0,0,0,.35);
+  --scrim-modal:   rgba(28,27,24,.55);
+  --shadow-drop:   0 -8px 22px rgba(0,0,0,.16);
+  --shadow-side:   4px 0 24px rgba(0,0,0,.14);
+
+  --focus:         #4a90d9;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg:            #121213;
+  --surface:       #1a1a1c;
+  --surface-alt:   #242427;
+  --surface-hi:    #2e2e32;
+  --row-hover:     #232326;
+
+  --text:          #e9e9ea;
+  --text-muted:    #8f9295;
+  --text-soft:     #b8babc;
+
+  --border:        #33353a;
+  --border-strong: #565a5f;
+  --divider:       #26262a;
+  --divider-soft:  #26262a;
+
+  --accent-won:    #5b9c55;
+  --accent-lost:   #cb5648;
+  --on-accent:     #ffffff;
+
+  --btn-bg:        #e9e9ea;
+  --btn-fg:        #121213;
+
+  --scrim:         rgba(0,0,0,.6);
+  --scrim-modal:   rgba(0,0,0,.65);
+  --shadow-drop:   0 -8px 22px rgba(0,0,0,.5);
+  --shadow-side:   4px 0 24px rgba(0,0,0,.5);
+
+  --focus:         #6aa9e9;
+}
+
 *, *::before, *::after {
-  box-sizing: border-box; 
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
   padding: 0;
-  background: #ffffff;
-  color: #1a1a1b;
+  background: var(--bg);
+  color: var(--text);
 }
 
-/* Hover utilities used by DSAdle */
-.dsadle-hover-bg:hover  { background-color: #f4f4f4 !important; }
+/* Hover utilities used by DSAdle. !important is still required — these rows
+   carry an inline `background` that would otherwise win the cascade.
+   The traffic-light colors are fixed macOS brand values, not themed. */
+.dsadle-hover-bg:hover  { background-color: var(--row-hover) !important; }
 .dsadle-hover-red:hover  { background-color: #e0443e !important; }
 .dsadle-hover-yellow:hover { background-color: #dea123 !important; }
 .dsadle-hover-green:hover { background-color: #1aab29 !important; }
-.dsadle-hover-chip:hover  { background-color: #a33c31 !important; }
+
+input::placeholder {
+  color: var(--text-muted);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
 
 button:disabled {
   opacity: 0.35;
