@@ -13,7 +13,7 @@ The project is a classic **two-process, two-language** web app:
 │   React + TypeScript    │  ◀───────────────────   │    Python + SQLAlchemy   │
 │   http://localhost:3000 │                          │   http://localhost:8000  │
 └─────────────────────────┘                          └──────────┬───────────────┘
-                                                                  │
+                                                                  │`
                                                                   ▼
                                                         ┌──────────────────┐
                                                         │  SQLite database  │

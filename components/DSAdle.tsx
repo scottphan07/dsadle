@@ -1,10 +1,49 @@
 'use client';
 
-import { useState, useEffect, KeyboardEvent, CSSProperties } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, KeyboardEvent, CSSProperties, ReactNode } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { fetchNames, fetchDaily, submitGuesses, DailyClues, Reveal } from '@/lib/api';
 
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
 const MAX_GUESSES = 5;
+
+// Day indices are UTC epoch-days, so labels must be formatted in UTC too —
+// formatting UTC midnight in local time shifts the date back a day west of UTC.
+const DATE_FMT: Intl.DateTimeFormatOptions = {
+  month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
+};
+
+const calNavStyle: CSSProperties = {
+  border: 'none', background: 'none', cursor: 'pointer', color: '#787c7e',
+  fontSize: 16, fontWeight: 700, lineHeight: 1, padding: '2px 8px',
+};
+
+const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+
+// ─── Animation ─────────────────────────────────────────────────────────────
+
+const SPRING = { type: 'spring', stiffness: 300, damping: 28 } as const;
+const EASE_OUT = { duration: 0.28, ease: [0.22, 1, 0.36, 1] } as const;
+const INSTANT = { duration: 0 } as const;
+// Minimize/restore: the window scales toward the button that opened it
+const SHRINK = { duration: 0.3 } as const;
+// Duration-based spring: `duration`/`bounce` replace stiffness/damping, never mix the two
+const FLIP = { type: 'spring', duration: 0.8, bounce: 0.18 } as const;
+
+// Spread onto any clickable control for consistent press feedback
+const pressable = {
+  whileHover: { scale: 1.03 },
+  whileTap: { scale: 0.94 },
+  transition: { type: 'spring', stiffness: 500, damping: 30 },
+} as const;
+
+// Sidebar rows are full-width — scaling them up on hover looks wrong
+const pressableRow = {
+  whileTap: { scale: 0.98 },
+  transition: { type: 'spring', stiffness: 500, damping: 30 },
+} as const;
 
 // ─── localStorage helpers ──────────────────────────────────────────────────
 
@@ -12,8 +51,12 @@ function todayIndex() {
   return Math.floor(Date.now() / 86400000);
 }
 
+function keyForDay(dayIdx: number): string {
+  return 'dsadle-' + dayIdx;
+}
+
 function keyFor(offset: number): string {
-  return 'dsadle-' + (todayIndex() + offset);
+  return keyForDay(todayIndex() + offset);
 }
 
 function readGuesses(key: string): string[] {
@@ -33,6 +76,27 @@ function saveGuesses(names: string[], offset: number): void {
   } catch {}
 }
 
+// ─── Modal chrome ──────────────────────────────────────────────────────────
+
+// Shared by the real window and by the animating copy, so the two can't drift
+// apart visually.
+const MODAL_HEADER_STYLE: CSSProperties = {
+  display: 'flex', alignItems: 'center', padding: '13px 18px',
+  background: '#2a2a30', borderBottom: '1px solid #3a3a42', flexShrink: 0,
+};
+
+const MODAL_PRE_STYLE: CSSProperties = {
+  margin: 0, padding: 22, overflow: 'auto',
+  fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace",
+  fontSize: 12.5, lineHeight: 1.65, color: '#e6e6ea', whiteSpace: 'pre',
+};
+
+const MODAL_FILENAME_STYLE: CSSProperties = {
+  fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12, color: '#b8b8c0', marginLeft: 8,
+};
+
+const LIGHT_COLORS = ['#ff5f57', '#febc2e', '#28c840'];
+
 function readResult(dayIdx: number): 'won' | 'lost' | null {
   if (typeof window === 'undefined') return null;
   const raw = localStorage.getItem('dsadle-result-' + dayIdx);
@@ -44,6 +108,98 @@ function saveResult(dayIdx: number, result: 'won' | 'lost'): void {
   try {
     localStorage.setItem('dsadle-result-' + dayIdx, result);
   } catch {}
+}
+
+// 'lost' also covers games left in progress — anything attempted but not won
+function dayStatus(dayIdx: number): 'won' | 'lost' | null {
+  if (readResult(dayIdx) === 'won') return 'won';
+  return readGuesses(keyForDay(dayIdx)).length > 0 ? 'lost' : null;
+}
+
+function labelForDay(dayIdx: number): string {
+  return new Date(dayIdx * 86400000).toLocaleDateString('en-US', DATE_FMT);
+}
+
+// ─── macOS traffic light ───────────────────────────────────────────────────
+
+// Circle plus a glyph that fades in with the group hover, matching how macOS
+// reveals all three symbols whenever the pointer is anywhere over the cluster.
+function TrafficLight({ color, glyphColor, hoverClass, title, onClick, visible, children }: {
+  color: string;
+  glyphColor: string;
+  hoverClass: string;
+  title: string;
+  onClick: () => void;
+  visible: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <span
+      onClick={onClick}
+      title={title}
+      className={hoverClass}
+      style={{
+        width: 12, height: 12, borderRadius: '50%', background: color, flexShrink: 0,
+        boxShadow: 'inset 0 0 0 0.5px rgba(0,0,0,.15)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+        color: glyphColor,
+      }}
+    >
+      <motion.svg
+        viewBox="0 0 12 12"
+        width={12}
+        height={12}
+        animate={{ opacity: visible ? 1 : 0 }}
+        transition={{ duration: 0.12 }}
+        style={{ display: 'block' }}
+      >
+        {children}
+      </motion.svg>
+    </span>
+  );
+}
+
+// ─── Shrink ────────────────────────────────────────────────────────────────
+
+type Rect = { x: number; y: number; w: number; h: number };
+type ShrinkState = { from: Rect; to: Rect; dir: 'in' | 'out' };
+
+// A copy of the window that scales between its own rect and the trigger that
+// opened it, fading as it lands. Scale is uniform on purpose — matching the
+// button's aspect exactly would visibly squash the code text.
+function Shrink({ state, children, onDone }: {
+  state: ShrinkState;
+  children: ReactNode;
+  onDone: () => void;
+}) {
+  const { from, to, dir } = state;
+
+  const collapsed = {
+    x: (to.x + to.w / 2) - (from.x + from.w / 2),
+    y: (to.y + to.h / 2) - (from.y + from.h / 2),
+    scale: to.w / from.w,
+    opacity: 0,
+  };
+  const expanded = { x: 0, y: 0, scale: 1, opacity: 1 };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 51, pointerEvents: 'none' }}>
+      <motion.div
+        initial={dir === 'out' ? expanded : collapsed}
+        animate={dir === 'out' ? collapsed : expanded}
+        transition={{ duration: SHRINK.duration, ease: dir === 'out' ? 'easeIn' : 'easeOut' }}
+        onAnimationComplete={onDone}
+        style={{
+          position: 'absolute',
+          left: from.x, top: from.y, width: from.w, height: from.h,
+          transformOrigin: 'center',
+          willChange: 'transform, opacity',
+        }}
+      >
+        {children}
+      </motion.div>
+    </div>
+  );
 }
 
 // ─── Component ────────────────────────────────────────────────────────────
@@ -67,10 +223,31 @@ export default function DSAdle() {
   const [sideOpen, setSideOpen] = useState(false);
   const [sideView, setSideView] = useState<'main' | 'archive'>('main');
   const [mounted, setMounted] = useState(false);
+  const [lightsHover, setLightsHover] = useState(false);
+  const [exitMode, setExitMode] = useState<'instant' | 'minimize'>('instant');
+  const [openedFrom, setOpenedFrom] = useState<'card' | 'over'>('card');
+  const [shrink, setShrink] = useState<ShrinkState | null>(null);
+  const [pendingShrinkOpen, setPendingShrinkOpen] = useState(false);
+  const [calOpen, setCalOpen] = useState(false);
+  // Set on mount rather than at declaration — todayIndex() is client-only
+  const [calMonth, setCalMonth] = useState<{ y: number; m: number } | null>(null);
+
+  const reduceMotion = useReducedMotion();
+
+  // Measured at animation time, never cached — the page can scroll while the
+  // window is open, and the box resizes when `modalExpanded` toggles.
+  const cardTriggerRef = useRef<HTMLDivElement>(null);
+  const overTriggerRef = useRef<HTMLButtonElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
 
   // Load the day's puzzle (and restore any saved game) whenever the day changes
   useEffect(() => {
     setMounted(true);
+    setCalMonth((prev) => {
+      if (prev) return prev;
+      const d = new Date(todayIndex() * 86400000);
+      return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
+    });
     let cancelled = false;
     async function load() {
       setLoading(true);
@@ -117,9 +294,7 @@ export default function DSAdle() {
   const wrong = guesses.filter((_, i) => results[i] === false);
   const revealed = loading || !daily ? 0 : isOver ? 5 : Math.min(5, 1 + wrong.length);
   const attemptsLeft = Math.max(0, MAX_GUESSES - guesses.length);
-  const dateLabel = new Date(dayIdx * 86400000).toLocaleDateString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
-  });
+  const dateLabel = labelForDay(dayIdx);
   const codeSnippet = daily?.code ?? '# implementation coming soon';
 
   // ── Clues ─────────────────────────────────────────────────────────────────
@@ -130,11 +305,7 @@ export default function DSAdle() {
     { value: daily?.time_clue ?? '', isCode: false },
     { value: daily?.space_clue ?? '', isCode: false },
     { value: '', isCode: true },
-  ].map((c, i) => ({
-    ...c,
-    lidOpacity: i < revealed ? 0 : 1,
-    lidPointerEvents: (i < revealed ? 'none' : 'auto') as CSSProperties['pointerEvents'],
-  }));
+  ].map((c, i) => ({ ...c, open: i < revealed }));
 
   // ── Suggestions ───────────────────────────────────────────────────────────
 
@@ -231,31 +402,118 @@ export default function DSAdle() {
     setSideOpen(false);
   }
 
-  function closeModal() {
+  // Shared by the archive list and the calendar; navigateTo clamps out the future
+  function goToDay(target: number) {
+    navigateTo(target - todayIndex());
+    setSideOpen(false);
+  }
+
+  // `mode` picks the backdrop fade: red closes instantly, yellow lingers so the
+  // scrim doesn't pop while the window is still travelling.
+  function closeModal(mode: 'instant' | 'minimize' = 'instant') {
+    setExitMode(mode);
     setModalOpen(false);
     setModalExpanded(false);
+    setLightsHover(false);
   }
+
+  // ── Minimize / restore ────────────────────────────────────────────────────
+
+  function toRect(el: Element | null): Rect | null {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  }
+
+  // Whichever trigger opened the window is where it goes home to
+  function triggerRect(src: 'card' | 'over'): Rect {
+    const el = src === 'card' ? cardTriggerRef.current : overTriggerRef.current;
+    return toRect(el) ?? {
+      x: window.innerWidth / 2 - 60, y: window.innerHeight - 48, w: 120, h: 32,
+    };
+  }
+
+  function openModal(src: 'card' | 'over') {
+    setOpenedFrom(src);
+    setModalOpen(true);
+    if (!reduceMotion) setPendingShrinkOpen(true);
+  }
+
+  function minimizeModal() {
+    const from = toRect(boxRef.current);
+    // Must measure before closeModal, which resets modalExpanded in the same batch
+    if (reduceMotion || !from) { closeModal('instant'); return; }
+    setShrink({ from, to: triggerRect(openedFrom), dir: 'out' });
+    closeModal('minimize');
+  }
+
+  // Measure the real box once it's mounted, then scale a copy up over it.
+  // Predicting the rect instead would be wrong for `height: auto`.
+  useLayoutEffect(() => {
+    if (!pendingShrinkOpen || !modalOpen || !boxRef.current) return;
+    const from = toRect(boxRef.current);
+    if (from) setShrink({ from, to: triggerRect(openedFrom), dir: 'in' });
+    setPendingShrinkOpen(false);
+    // triggerRect/toRect read refs only; re-running on identity churn is pointless
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingShrinkOpen, modalOpen, openedFrom]);
 
   // ── Archive days ──────────────────────────────────────────────────────────
 
-  const archiveDays = mounted
-    ? Array.from({ length: 30 }, (_, i) => {
-        const dayOff = -(i + 1);
-        const dayIdx2 = todayIndex() + dayOff;
-        const label = new Date(dayIdx2 * 86400000).toLocaleDateString('en-US', {
-          month: 'short', day: 'numeric', year: 'numeric',
-        });
-        const saved = readGuesses(keyFor(dayOff));
-        const solved = readResult(dayIdx2) === 'won';
-        const attempted = saved.length > 0;
-        return {
-          label,
-          dot: solved ? '✓' : attempted ? '✗' : '',
-          dotColor: solved ? '#538d4e' : '#c14b3e',
-          onClick: () => { navigateTo(dayOff); setSideOpen(false); },
-        };
-      })
-    : [];
+  // Memoised: each entry hits localStorage twice, and this ran on every render
+  const archiveDays = useMemo(
+    () => (mounted
+      ? Array.from({ length: 30 }, (_, i) => {
+          const dayOff = -(i + 1);
+          const d = todayIndex() + dayOff;
+          const status = dayStatus(d);
+          return {
+            dayIdx: d,
+            label: labelForDay(d),
+            dot: status === 'won' ? '✓' : status === 'lost' ? '✗' : '',
+            dotColor: status === 'won' ? '#538d4e' : '#c14b3e',
+          };
+        })
+      : []),
+    // `guesses` isn't read here — it's a cache key. These entries read
+    // localStorage, which the linter can't see, so we re-derive whenever the
+    // played state changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mounted, guesses],
+  );
+
+  // ── Calendar ──────────────────────────────────────────────────────────────
+
+  // All arithmetic is UTC — day indices are UTC epoch-days, and mixing in local
+  // accessors is what shifts dates by one either side of midnight.
+  const calendar = useMemo(() => {
+    if (!mounted || !calMonth) return null;
+    const { y, m } = calMonth;
+    const today = todayIndex();
+    const firstWeekday = new Date(Date.UTC(y, m, 1)).getUTCDay();
+    const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const todayDate = new Date(today * 86400000);
+    const isCurrentMonth = todayDate.getUTCFullYear() === y && todayDate.getUTCMonth() === m;
+
+    const cells = Array.from({ length: firstWeekday + daysInMonth }, (_, i) => {
+      if (i < firstWeekday) return null;
+      const date = i - firstWeekday + 1;
+      const d = Date.UTC(y, m, date) / 86400000;
+      return { date, dayIdx: d, status: dayStatus(d), future: d > today, isToday: d === today };
+    });
+
+    return { cells, label: `${MONTHS[m]} ${y}`, atCurrentMonth: isCurrentMonth };
+    // `guesses` is a localStorage cache key, not a value read above — see archiveDays
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, calMonth, guesses]);
+
+  function shiftMonth(delta: number) {
+    setCalMonth((prev) => {
+      if (!prev) return prev;
+      const d = new Date(Date.UTC(prev.y, prev.m + delta, 1));
+      return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
+    });
+  }
 
   // ── Modal box style ───────────────────────────────────────────────────────
 
@@ -270,7 +528,26 @@ export default function DSAdle() {
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
+    // Mounted but concealed while the animating copy scales in over the top
+    visibility: pendingShrinkOpen || shrink?.dir === 'in' ? 'hidden' : 'visible',
   };
+
+  // ── Modal / traffic-light animation ───────────────────────────────────────
+
+  // Memoised: these are recreated on every render otherwise, and swapping the
+  // variants object mid-animation leaves Motion stalled part-way through.
+  //
+  // Exit is a dynamic variant so AnimatePresence's `custom` prop supplies the
+  // mode at removal time — reading it from state would give the stale value.
+  const backdropVariants = useMemo(() => ({
+    hidden: { opacity: 0 },
+    visible: { opacity: 1, transition: reduceMotion ? INSTANT : EASE_OUT },
+    exit: (mode: 'instant' | 'minimize') => ({
+      opacity: 0,
+      // Hold the scrim for the shrink's travel so it doesn't pop out from under it
+      transition: mode === 'minimize' && !reduceMotion ? { duration: SHRINK.duration } : INSTANT,
+    }),
+  }), [reduceMotion]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Render
@@ -282,10 +559,11 @@ export default function DSAdle() {
       {/* ── Header ── */}
       <div style={{ borderBottom: '1px solid #d3d6da' }}>
         <div style={{ maxWidth: 520, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 16px' }}>
-          <span
+          <motion.span
+            {...pressable}
             onClick={() => { setSideOpen(true); setSideView('main'); }}
             style={{ width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#787c7e', fontSize: 21, cursor: 'pointer', lineHeight: '1' }}
-          >☰</span>
+          >☰</motion.span>
           <div
             onClick={goHome}
             style={{ fontSize: 30, fontWeight: 800, letterSpacing: '.16em', textTransform: 'uppercase', color: '#1a1a1b', cursor: 'pointer' }}
@@ -299,9 +577,9 @@ export default function DSAdle() {
 
         {/* Nav row */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, color: '#787c7e', marginBottom: 8 }}>
-          <button onClick={() => navigate(-1)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#787c7e', fontSize: 12, fontWeight: 600, padding: 4 }}>‹ Prev</button>
+          <motion.button {...pressable} onClick={() => navigate(-1)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#787c7e', fontSize: 12, fontWeight: 600, padding: 4 }}>‹ Prev</motion.button>
           <div style={{ fontWeight: 600 }}>{dateLabel} · {attemptsLeft} guesses left</div>
-          <button onClick={() => navigate(1)} disabled={offset >= 0} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#787c7e', fontSize: 12, fontWeight: 600, padding: 4 }}>Next ›</button>
+          <motion.button {...pressable} onClick={() => navigate(1)} disabled={offset >= 0} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#787c7e', fontSize: 12, fontWeight: 600, padding: 4 }}>Next ›</motion.button>
         </div>
 
         {/* Subtitle */}
@@ -313,28 +591,44 @@ export default function DSAdle() {
         {error && (
           <div style={{ textAlign: 'center', fontSize: 13, color: '#c14b3e', border: '2px solid #c14b3e', borderRadius: 3, padding: '12px 16px', marginBottom: 18, lineHeight: 1.4 }}>
             {error}
-            <button
+            <motion.button
+              {...pressable}
               onClick={() => setRetryTick((t) => t + 1)}
               style={{ display: 'block', margin: '10px auto 0', fontSize: 12, fontWeight: 700, color: '#fff', background: '#c14b3e', border: 'none', borderRadius: 3, padding: '7px 14px', cursor: 'pointer' }}
-            >Retry</button>
+            >Retry</motion.button>
           </div>
         )}
 
         {/* Clue cards */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
           {clues.map((c, i) => (
-            <div key={i} style={{ flex: 1, position: 'relative' }}>
-              <div style={{ position: 'relative', minHeight: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '10px 16px', background: '#fff', border: '2px solid #878a8c', color: '#1a1a1b', fontWeight: 700, fontSize: 15, borderRadius: 2, lineHeight: 1.3 }}>
-                {!c.isCode && <span>{c.value}</span>}
-                {c.isCode && (
-                  <div onClick={() => setModalOpen(true)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, width: '100%', cursor: 'pointer' }}>
-                    <span>View implementation</span>
-                    <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: '#787c7e' }}>⟨ ⟩</span>
-                  </div>
-                )}
-              </div>
-              {/* Lid overlay — hides clue until revealed */}
-              <div style={{ position: 'absolute', inset: 0, border: '2px solid #d3d6da', background: '#fafafa', borderRadius: 2, opacity: c.lidOpacity, pointerEvents: c.lidPointerEvents }} />
+            // Ref sits on the perspective wrapper, not the trigger inside it —
+            // measuring within the 3D subtree would pick up the card's rotation
+            <div key={i} ref={c.isCode ? cardTriggerRef : undefined} style={{ flex: 1, position: 'relative', perspective: 600 }}>
+              {/* Flip container — 0deg shows the clue, 180deg shows the lid */}
+              <motion.div
+                initial={false}
+                animate={{ rotateX: c.open ? 0 : 180 }}
+                transition={reduceMotion ? INSTANT : FLIP}
+                style={{ position: 'relative', transformStyle: 'preserve-3d' }}
+              >
+                {/* Front face — in normal flow, so it defines the card height */}
+                <div style={{ position: 'relative', minHeight: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '10px 16px', background: '#fff', border: '2px solid #878a8c', color: '#1a1a1b', fontWeight: 700, fontSize: 15, borderRadius: 2, lineHeight: 1.3, backfaceVisibility: 'hidden' }}>
+                  {!c.isCode && <span>{c.value}</span>}
+                  {c.isCode && (
+                    <motion.div
+                      {...pressable}
+                      onClick={() => openModal('card')}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, width: '100%', cursor: 'pointer' }}
+                    >
+                      <span>View implementation</span>
+                      <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', color: '#787c7e' }}>⟨ ⟩</span>
+                    </motion.div>
+                  )}
+                </div>
+                {/* Back face — the lid, pre-rotated so it reads upright at 180deg */}
+                <div style={{ position: 'absolute', inset: 0, border: '2px solid #d3d6da', background: '#fafafa', borderRadius: 2, backfaceVisibility: 'hidden', transform: 'rotateX(180deg)', pointerEvents: c.open ? 'none' : 'auto' }} />
+              </motion.div>
             </div>
           ))}
         </div>
@@ -344,25 +638,41 @@ export default function DSAdle() {
           <div style={{ marginBottom: 18 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: '#787c7e', marginBottom: 8 }}>Wrong guesses</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {wrong.map((name) => (
-                <span key={name} style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: '#c14b3e', borderRadius: 2, padding: '7px 12px' }}>
-                  ✕ {name}
-                </span>
-              ))}
+              <AnimatePresence initial={false}>
+                {wrong.map((name) => (
+                  <motion.span
+                    key={name}
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    transition={reduceMotion ? INSTANT : SPRING}
+                    style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: '#c14b3e', borderRadius: 2, padding: '7px 12px' }}
+                  >
+                    ✕ {name}
+                  </motion.span>
+                ))}
+              </AnimatePresence>
             </div>
           </div>
         )}
 
         {/* Game over */}
         {isOver && reveal && (
-          <div style={{ textAlign: 'center', padding: '20px 16px', border: '2px solid #d3d6da', borderRadius: 3, marginBottom: 18 }}>
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={reduceMotion ? INSTANT : EASE_OUT}
+            style={{ textAlign: 'center', padding: '20px 16px', border: '2px solid #d3d6da', borderRadius: 3, marginBottom: 18 }}
+          >
             <div style={{ fontSize: 24, fontWeight: 800, color: '#1a1a1b' }}>{reveal.name}</div>
             <div style={{ fontSize: 13, color: '#444', marginTop: 8, lineHeight: 1.5 }}>{reveal.description}</div>
-            <button
-              onClick={() => setModalOpen(true)}
+            <motion.button
+              {...pressable}
+              ref={overTriggerRef}
+              onClick={() => openModal('over')}
               style={{ marginTop: 14, fontSize: 13, fontWeight: 700, color: '#fff', background: '#1a1a1b', border: 'none', borderRadius: 3, padding: '10px 18px', cursor: 'pointer' }}
-            >⟨ ⟩ View implementation</button>
-          </div>
+            >⟨ ⟩ View implementation</motion.button>
+          </motion.div>
         )}
 
         {/* Guess input */}
@@ -377,94 +687,268 @@ export default function DSAdle() {
                 placeholder={loading ? 'Loading…' : 'Type a structure or algorithm'}
                 style={{ width: '100%', padding: '13px 14px', border: '2px solid #878a8c', borderRadius: 3, fontSize: 14, outline: 'none', fontFamily: FONT }}
               />
-              {dropdownOpen && suggestions.length > 0 && (
-                <div style={{ position: 'absolute', bottom: 'calc(100% + 5px)', left: 0, right: 0, background: '#fff', border: '1px solid #878a8c', borderRadius: 3, boxShadow: '0 -8px 22px rgba(0,0,0,.16)', zIndex: 5, overflow: 'hidden' }}>
-                  {suggestions.map((s) => (
-                    <div
-                      key={s.name}
-                      onClick={() => fill(s.name)}
-                      className="dsadle-hover-bg"
-                      style={{ padding: '12px 14px', fontSize: 14, fontWeight: 600, cursor: 'pointer', borderTop: '1px solid #eee', background: s.bg }}
-                    >{s.name}</div>
-                  ))}
-                </div>
-              )}
+              <AnimatePresence>
+                {dropdownOpen && suggestions.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 4 }}
+                    transition={reduceMotion ? INSTANT : { duration: 0.15 }}
+                    style={{ position: 'absolute', bottom: 'calc(100% + 5px)', left: 0, right: 0, background: '#fff', border: '1px solid #878a8c', borderRadius: 3, boxShadow: '0 -8px 22px rgba(0,0,0,.16)', zIndex: 5, overflow: 'hidden' }}
+                  >
+                    {suggestions.map((s) => (
+                      <motion.div
+                        key={s.name}
+                        {...pressableRow}
+                        onClick={() => fill(s.name)}
+                        className="dsadle-hover-bg"
+                        style={{ padding: '12px 14px', fontSize: 14, fontWeight: 600, cursor: 'pointer', borderTop: '1px solid #eee', background: s.bg }}
+                      >{s.name}</motion.div>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
-            <button
+            <motion.button
+              {...pressable}
+              animate={{ opacity: submitting ? 0.6 : 1 }}
               onClick={submitGuess}
               disabled={submitting || loading || !daily}
-              style={{ flexShrink: 0, padding: '0 22px', background: '#1a1a1b', color: '#fff', border: 'none', borderRadius: 3, fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', opacity: submitting ? 0.6 : 1 }}
-            >{submitting ? '…' : 'Guess'}</button>
+              style={{ flexShrink: 0, padding: '0 22px', background: '#1a1a1b', color: '#fff', border: 'none', borderRadius: 3, fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer' }}
+            >{submitting ? '…' : 'Guess'}</motion.button>
           </div>
         )}
       </div>
 
       {/* ── Code modal ── */}
-      {modalOpen && (
-        <div
-          onClick={closeModal}
-          style={{ position: 'fixed', inset: 0, background: 'rgba(28,27,24,.55)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }}
-        >
-          <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', padding: '13px 18px', background: '#2a2a30', borderBottom: '1px solid #3a3a42', flexShrink: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <span onClick={closeModal} className="dsadle-hover-red" style={{ width: 11, height: 11, borderRadius: '50%', background: '#ff5f56', display: 'inline-block', cursor: 'pointer' }} title="Close" />
-                <span style={{ width: 11, height: 11, borderRadius: '50%', background: '#ffbd2e', display: 'inline-block' }} />
-                <span onClick={() => setModalExpanded((v) => !v)} className="dsadle-hover-green" style={{ width: 11, height: 11, borderRadius: '50%', background: '#27c93f', display: 'inline-block', cursor: 'pointer' }} title="Expand / shrink" />
-                <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12, color: '#b8b8c0', marginLeft: 8 }}>example_implementation.py</span>
+      <AnimatePresence custom={exitMode}>
+        {modalOpen && (
+          <motion.div
+            key="code-modal"
+            custom={exitMode}
+            variants={backdropVariants}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            onClick={() => closeModal('instant')}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(28,27,24,.55)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }}
+          >
+            {/* Centring wrapper. It deliberately has no enter/exit animation of
+                its own — the scaling copy is the transition in both directions,
+                and a competing fade here stalls part-way when that state churns. */}
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              <motion.div ref={boxRef} layout transition={reduceMotion ? INSTANT : { duration: 0.3, ease: 'easeInOut' }} style={modalBoxStyle}>
+                <motion.div layout="position" style={MODAL_HEADER_STYLE}>
+                  <div
+                    onMouseEnter={() => setLightsHover(true)}
+                    onMouseLeave={() => setLightsHover(false)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                  >
+                    <TrafficLight color="#ff5f57" glyphColor="#4d0000" hoverClass="dsadle-hover-red" title="Close" visible={lightsHover} onClick={() => closeModal('instant')}>
+                      <path d="M3.9 3.9 L8.1 8.1 M8.1 3.9 L3.9 8.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" fill="none" />
+                    </TrafficLight>
+                    <TrafficLight color="#febc2e" glyphColor="#995700" hoverClass="dsadle-hover-yellow" title="Minimize" visible={lightsHover} onClick={minimizeModal}>
+                      <path d="M3.4 6 L8.6 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" fill="none" />
+                    </TrafficLight>
+                    <TrafficLight color="#28c840" glyphColor="#006500" hoverClass="dsadle-hover-green" title={modalExpanded ? 'Restore' : 'Expand'} visible={lightsHover} onClick={() => setModalExpanded((v) => !v)}>
+                      {modalExpanded ? (
+                        /* Restore — right angles meet at the centre, tips pointing inward */
+                        <path d="M5.4 5.4 L5.4 3.1 L3.1 5.4 Z M6.6 6.6 L6.6 8.9 L8.9 6.6 Z" fill="currentColor" />
+                      ) : (
+                        /* Expand — right angles at the outer corners, tips pointing outward */
+                        <path d="M3.4 3.4 L8.0 3.4 L3.4 8.0 Z M8.6 8.6 L4.0 8.6 L8.6 4.0 Z" fill="currentColor" />
+                      )}
+                    </TrafficLight>
+                    <span style={MODAL_FILENAME_STYLE}>example_implementation.py</span>
+                  </div>
+                </motion.div>
+                <motion.pre layout="position" style={MODAL_PRE_STYLE}>{codeSnippet}</motion.pre>
+              </motion.div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Minimize / restore ── */}
+      {shrink && (
+        <Shrink state={shrink} onDone={() => setShrink(null)}>
+          <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#1e1e22', borderRadius: 10, overflow: 'hidden', boxShadow: '0 24px 70px rgba(0,0,0,.45)' }}>
+            <div style={MODAL_HEADER_STYLE}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {LIGHT_COLORS.map((c) => (
+                  <span key={c} style={{ width: 12, height: 12, borderRadius: '50%', background: c, flexShrink: 0, boxShadow: 'inset 0 0 0 0.5px rgba(0,0,0,.15)' }} />
+                ))}
+                <span style={MODAL_FILENAME_STYLE}>example_implementation.py</span>
               </div>
             </div>
-            <pre style={{ margin: 0, padding: 22, overflow: 'auto', fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace", fontSize: 12.5, lineHeight: 1.65, color: '#e6e6ea', whiteSpace: 'pre' }}>{codeSnippet}</pre>
+            <pre style={MODAL_PRE_STYLE}>{codeSnippet}</pre>
           </div>
-        </div>
+        </Shrink>
       )}
 
       {/* ── Sidebar ── */}
-      {sideOpen && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 40 }}>
-          <div onClick={() => setSideOpen(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.35)' }} />
-          <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 280, background: '#fff', boxShadow: '4px 0 24px rgba(0,0,0,.14)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <AnimatePresence>
+        {sideOpen && (
+          <motion.div key="sidebar" style={{ position: 'fixed', inset: 0, zIndex: 40 }}>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={reduceMotion ? INSTANT : EASE_OUT}
+              onClick={() => setSideOpen(false)}
+              style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.35)' }}
+            />
+            <motion.div
+              initial={{ x: -280 }}
+              animate={{ x: 0 }}
+              exit={{ x: -280 }}
+              transition={reduceMotion ? INSTANT : EASE_OUT}
+              onClick={(e) => e.stopPropagation()}
+              style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 280, background: '#fff', boxShadow: '4px 0 24px rgba(0,0,0,.14)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+            >
 
-            {/* Sidebar header */}
-            <div style={{ padding: '14px 20px', borderBottom: '1px solid #d3d6da', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-              <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '.12em', textTransform: 'uppercase', color: '#1a1a1b' }}>DSAdle</div>
-              <button onClick={() => setSideOpen(false)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#787c7e', padding: 0, lineHeight: '1' }}>×</button>
-            </div>
-
-            {/* Main nav */}
-            {sideView === 'main' && (
-              <div style={{ flex: 1, overflowY: 'auto' }}>
-                <div onClick={goHome} className="dsadle-hover-bg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', fontSize: 15, fontWeight: 600, color: '#1a1a1b' }}>
-                  <span>Today&apos;s Puzzle</span>
-                  <span style={{ color: '#787c7e' }}>›</span>
-                </div>
-                <div onClick={() => setSideView('archive')} className="dsadle-hover-bg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', fontSize: 15, fontWeight: 600, color: '#1a1a1b' }}>
-                  <span>Archive</span>
-                  <span style={{ color: '#787c7e' }}>›</span>
-                </div>
+              {/* Sidebar header */}
+              <div style={{ padding: '14px 20px', borderBottom: '1px solid #d3d6da', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+                <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '.12em', textTransform: 'uppercase', color: '#1a1a1b' }}>DSAdle</div>
+                <motion.button {...pressable} onClick={() => setSideOpen(false)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#787c7e', padding: 0, lineHeight: '1' }}>×</motion.button>
               </div>
-            )}
 
-            {/* Archive */}
-            {sideView === 'archive' && (
-              <>
-                <div onClick={() => setSideView('main')} className="dsadle-hover-bg" style={{ flexShrink: 0, padding: '12px 20px', borderBottom: '1px solid #d3d6da', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <span style={{ color: '#787c7e' }}>‹</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: '#787c7e' }}>Archive</span>
-                </div>
-                <div style={{ flex: 1, overflowY: 'auto' }}>
-                  {archiveDays.map((day, i) => (
-                    <div key={i} onClick={day.onClick} className="dsadle-hover-bg" style={{ padding: '13px 20px', borderBottom: '1px solid #f0f0f0', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1b' }}>{day.label}</div>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: day.dotColor }}>{day.dot}</span>
+              {/* Panes — main slides left as archive slides in from the right */}
+              <AnimatePresence mode="wait" initial={false}>
+                {sideView === 'main' ? (
+                  <motion.div
+                    key="main"
+                    initial={{ x: -280, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={{ x: -280, opacity: 0 }}
+                    transition={reduceMotion ? INSTANT : { duration: 0.2, ease: 'easeOut' }}
+                    style={{ flex: 1, overflowY: 'auto' }}
+                  >
+                    <motion.div {...pressableRow} onClick={goHome} className="dsadle-hover-bg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', fontSize: 15, fontWeight: 600, color: '#1a1a1b' }}>
+                      <span>Today&apos;s Puzzle</span>
+                      <span style={{ color: '#787c7e' }}>›</span>
+                    </motion.div>
+                    <motion.div {...pressableRow} onClick={() => setSideView('archive')} className="dsadle-hover-bg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', fontSize: 15, fontWeight: 600, color: '#1a1a1b' }}>
+                      <span>Archive</span>
+                      <span style={{ color: '#787c7e' }}>›</span>
+                    </motion.div>
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="archive"
+                    initial={{ x: 280, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={{ x: 280, opacity: 0 }}
+                    transition={reduceMotion ? INSTANT : { duration: 0.2, ease: 'easeOut' }}
+                    style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}
+                  >
+                    {/* Two separate controls in one bar: back on the left,
+                        calendar toggle on the right. Splitting them keeps the
+                        icon's click from bubbling into the back navigation. */}
+                    <div style={{ flexShrink: 0, borderBottom: '1px solid #d3d6da', display: 'flex', alignItems: 'stretch' }}>
+                      <motion.div
+                        {...pressableRow}
+                        onClick={() => setSideView('main')}
+                        className="dsadle-hover-bg"
+                        style={{ flex: 1, padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+                      >
+                        <span style={{ color: '#787c7e' }}>‹</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: '#787c7e' }}>Archive</span>
+                      </motion.div>
+                      <motion.button
+                        {...pressable}
+                        onClick={() => setCalOpen((v) => !v)}
+                        title="Jump to date"
+                        aria-label="Jump to date"
+                        animate={{ color: calOpen ? '#1a1a1b' : '#787c7e' }}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '0 20px', display: 'flex', alignItems: 'center' }}
+                      >
+                        <svg viewBox="0 0 16 16" width={15} height={15} style={{ display: 'block' }}>
+                          <circle cx="7" cy="7" r="4.6" stroke="currentColor" strokeWidth="1.6" fill="none" />
+                          <path d="M10.5 10.5 L14 14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" fill="none" />
+                        </svg>
+                      </motion.button>
                     </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+
+                    {/* Month grid */}
+                    <AnimatePresence initial={false}>
+                      {calOpen && calendar && (
+                        <motion.div
+                          key="calendar"
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={reduceMotion ? INSTANT : EASE_OUT}
+                          style={{ flexShrink: 0, overflow: 'hidden', borderBottom: '1px solid #d3d6da' }}
+                        >
+                          <div style={{ padding: '10px 20px 14px' }}>
+                            {/* Month nav */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                              <motion.button {...pressable} onClick={() => shiftMonth(-1)} style={calNavStyle}>‹</motion.button>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: '#1a1a1b' }}>{calendar.label}</div>
+                              <motion.button {...pressable} onClick={() => shiftMonth(1)} disabled={calendar.atCurrentMonth} style={calNavStyle}>›</motion.button>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
+                              {WEEKDAYS.map((w, i) => (
+                                <div key={i} style={{ textAlign: 'center', fontSize: 10, fontWeight: 700, color: '#787c7e', paddingBottom: 4 }}>{w}</div>
+                              ))}
+                            </div>
+
+                            <AnimatePresence mode="wait" initial={false}>
+                              <motion.div
+                                key={calendar.label}
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                transition={reduceMotion ? INSTANT : { duration: 0.15 }}
+                                style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}
+                              >
+                                {calendar.cells.map((cell, i) => {
+                                  if (!cell) return <div key={i} />;
+                                  const selected = cell.dayIdx === dayIdx;
+                                  return (
+                                    <motion.button
+                                      key={i}
+                                      {...(cell.future ? {} : pressable)}
+                                      onClick={() => goToDay(cell.dayIdx)}
+                                      disabled={cell.future}
+                                      title={labelForDay(cell.dayIdx)}
+                                      style={{
+                                        aspectRatio: '1', border: selected ? '2px solid #1a1a1b' : cell.isToday ? '1px solid #878a8c' : '1px solid transparent',
+                                        borderRadius: 3, fontSize: 11, fontWeight: 700, fontFamily: FONT, padding: 0,
+                                        cursor: cell.future ? 'default' : 'pointer',
+                                        background: cell.status === 'won' ? '#538d4e' : cell.status === 'lost' ? '#c14b3e' : 'transparent',
+                                        color: cell.status ? '#fff' : '#1a1a1b',
+                                      }}
+                                    >{cell.date}</motion.button>
+                                  );
+                                })}
+                              </motion.div>
+                            </AnimatePresence>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    <div style={{ flex: 1, overflowY: 'auto' }}>
+                      {archiveDays.map((day) => (
+                        <motion.div key={day.dayIdx} {...pressableRow} onClick={() => goToDay(day.dayIdx)} className="dsadle-hover-bg" style={{ padding: '13px 20px', borderBottom: '1px solid #f0f0f0', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1b' }}>{day.label}</div>
+                          <span style={{ fontSize: 14, fontWeight: 700, color: day.dotColor }}>{day.dot}</span>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -13,8 +13,9 @@ body {
 
 /* Hover utilities used by DSAdle */
 .dsadle-hover-bg:hover  { background-color: #f4f4f4 !important; }
-.dsadle-hover-red:hover  { background-color: #e0443a !important; }
-.dsadle-hover-green:hover { background-color: #1faa32 !important; }
+.dsadle-hover-red:hover  { background-color: #e0443e !important; }
+.dsadle-hover-yellow:hover { background-color: #dea123 !important; }
+.dsadle-hover-green:hover { background-color: #1aab29 !important; }
 .dsadle-hover-chip:hover  { background-color: #a33c31 !important; }
 
 button:disabled {
