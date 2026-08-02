@@ -2,15 +2,16 @@
 
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, KeyboardEvent, CSSProperties } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { fetchNames, fetchDaily, fetchRange, submitGuesses, DailyClues, DayRange, Reveal } from '@/lib/api';
+import { fetchNames, fetchDaily, submitGuesses, DailyClues, Reveal } from '@/lib/api';
 
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
 const MAX_GUESSES = 5;
 
-// There is no launch-day constant here any more. Which days are playable is a
-// fact about the database — each question row carries the date it's the puzzle
-// for — so the server tells us via /api/game/range and this file never derives
-// "today" from the browser clock.
+// Day one. Everything before it is unplayable — the backend picks its answer
+// with `day_idx % n`, so without a floor every date back to 1970 returns a real
+// puzzle. Mirrored by LAUNCH_DAY_IDX in backend/routers/game.py; change both.
+// Month is 0-based: 5 is June.
+const LAUNCH_DAY = Math.floor(Date.UTC(2026, 5, 21) / 86400000); // 2026-06-21
 
 // ─── Layout ────────────────────────────────────────────────────────────────
 
@@ -64,7 +65,7 @@ const EASE_OUT = { duration: 0.28, ease: [0.22, 1, 0.36, 1] } as const;
 const INSTANT = { duration: 0 } as const;
 // Minimize/restore: the window warps into the trigger that opened it. Long
 // enough that the staggered rows read as a curve rather than a blur.
-const GENIE_MS = 550;
+const GENIE_MS = 200;
 // Duration-based spring: `duration`/`bounce` replace stiffness/damping, never mix the two
 const FLIP = { type: 'spring', duration: 0.8, bounce: 0.18 } as const;
 
@@ -83,8 +84,16 @@ const pressableRow = {
 
 // ─── localStorage helpers ──────────────────────────────────────────────────
 
+function todayIndex() {
+  return Math.floor(Date.now() / 86400000);
+}
+
 function keyForDay(dayIdx: number): string {
   return 'dsadle-' + dayIdx;
+}
+
+function keyFor(offset: number): string {
+  return keyForDay(todayIndex() + offset);
 }
 
 function readGuesses(key: string): string[] {
@@ -97,13 +106,10 @@ function readGuesses(key: string): string[] {
   }
 }
 
-// Takes an absolute day index rather than an offset: deriving the key from a
-// live clock at save time meant a game saved just after UTC midnight landed
-// under a different key than the one it was read from.
-function saveGuesses(names: string[], dayIdx: number): void {
+function saveGuesses(names: string[], offset: number): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(keyForDay(dayIdx), JSON.stringify(names));
+    localStorage.setItem(keyFor(offset), JSON.stringify(names));
   } catch {}
 }
 
@@ -472,10 +478,7 @@ export default function DSAdle() {
   const [guesses, setGuesses] = useState<string[]>([]);
   const [results, setResults] = useState<boolean[]>([]);
   const [reveal, setReveal] = useState<Reveal | null>(null);
-  // Absolute UTC epoch-day, not an offset from "today" — today is no longer
-  // something this component can compute. Null until /range answers.
-  const [range, setRange] = useState<DayRange | null>(null);
-  const [dayIdx, setDayIdx] = useState<number | null>(null);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -509,57 +512,32 @@ export default function DSAdle() {
   const overTriggerRef = useRef<HTMLButtonElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
 
-  // Bootstrap: which days exist, and the name list (day-independent, so it
-  // belongs here rather than being refetched on every day change). Everything
-  // below waits on this — the day to show comes from the server, not the clock.
-  useEffect(() => {
-    setMounted(true);
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const [r, nm] = await Promise.all([fetchRange(), fetchNames()]);
-        if (cancelled) return;
-        setRange(r);
-        setNames(nm);
-        // `?? prev` keeps the day you were on across a Retry
-        setDayIdx((prev) => prev ?? r.last_day_idx);
-        setCalMonth((prev) => {
-          if (prev) return prev;
-          const d = new Date((r.last_day_idx ?? r.today_day_idx) * 86400000);
-          return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
-        });
-        // Nothing scheduled: the empty state renders, not the error banner
-        if (r.day_idxs.length === 0) setLoading(false);
-      } catch {
-        if (cancelled) return;
-        setError('Could not reach the DSAdle server. Is the backend running?');
-        setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [retryTick]);
-
   // Load the day's puzzle (and restore any saved game) whenever the day changes
   useEffect(() => {
-    if (dayIdx === null) return;
+    setMounted(true);
+    setCalMonth((prev) => {
+      if (prev) return prev;
+      const d = new Date(todayIndex() * 86400000);
+      return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
+    });
     let cancelled = false;
-    async function load(day: number) {
+    async function load() {
       setLoading(true);
       setError(null);
       setDaily(null);
       setResults([]);
       setReveal(null);
-      const saved = readGuesses(keyForDay(day));
+      const dayIdx = todayIndex() + offset;
+      const saved = readGuesses(keyFor(offset));
       setGuesses(saved);
       try {
-        const d = await fetchDaily(day);
+        const [nm, d] = await Promise.all([fetchNames(), fetchDaily(dayIdx)]);
         if (cancelled) return;
+        setNames(nm);
         setDaily(d.clues);
         if (saved.length > 0) {
           try {
-            const r = await submitGuesses(day, saved);
+            const r = await submitGuesses(dayIdx, saved);
             if (cancelled) return;
             setResults(r.results);
             setReveal(r.reveal);
@@ -567,7 +545,7 @@ export default function DSAdle() {
             // Saved guesses reference names no longer in the question bank
             if (cancelled) return;
             setGuesses([]);
-            saveGuesses([], day);
+            saveGuesses([], offset);
           }
         }
       } catch {
@@ -576,9 +554,9 @@ export default function DSAdle() {
         if (!cancelled) setLoading(false);
       }
     }
-    load(dayIdx);
+    load();
     return () => { cancelled = true; };
-  }, [dayIdx, retryTick]);
+  }, [offset, retryTick]);
 
   // Follow the OS while the tab is open — covers the auto light/dark switch
   // macOS and Windows perform at sunset. Deliberately does not saveTheme: a
@@ -599,22 +577,13 @@ export default function DSAdle() {
 
   // ── Derived values ────────────────────────────────────────────────────────
 
-  const days = useMemo(() => range?.day_idxs ?? [], [range]);
-  const playable = useMemo(() => new Set(days), [days]);
-  // Position in the playable list, so Prev/Next step over schedule gaps
-  // instead of blindly adding ±1 to the date.
-  const pos = dayIdx === null ? -1 : days.indexOf(dayIdx);
-  // True once the schedule has run out and the newest puzzle is behind today
-  const bankExhausted = range !== null && range.last_day_idx !== null
-    && range.last_day_idx < range.today_day_idx;
-  const noPuzzles = range !== null && range.day_idxs.length === 0;
-
+  const dayIdx = todayIndex() + offset;
   const won = results.some(Boolean);
   const isOver = won || guesses.length >= MAX_GUESSES;
   const wrong = guesses.filter((_, i) => results[i] === false);
   const revealed = loading || !daily ? 0 : isOver ? 5 : Math.min(5, 1 + wrong.length);
   const attemptsLeft = Math.max(0, MAX_GUESSES - guesses.length);
-  const dateLabel = dayIdx === null ? '' : labelForDay(dayIdx);
+  const dateLabel = labelForDay(dayIdx);
   const codeSnippet = daily?.code ?? '# implementation coming soon';
 
   // ── Clues ─────────────────────────────────────────────────────────────────
@@ -648,7 +617,7 @@ export default function DSAdle() {
   // ── Actions ───────────────────────────────────────────────────────────────
 
   async function submit(name: string) {
-    if (isOver || submitting || dayIdx === null) return;
+    if (isOver || submitting) return;
     if (!names.includes(name) || guesses.includes(name)) return;
     const next = [...guesses, name];
     setSubmitting(true);
@@ -657,7 +626,7 @@ export default function DSAdle() {
       setGuesses(next);
       setResults(r.results);
       setReveal(r.reveal);
-      saveGuesses(next, dayIdx);
+      saveGuesses(next, offset);
       if (r.game_over) saveResult(dayIdx, r.won ? 'won' : 'lost');
       setError(null);
       setQ('');
@@ -705,31 +674,32 @@ export default function DSAdle() {
     }
   }
 
-  // Steps through the playable list rather than adding ±1 to the date, so a
-  // gap in the schedule is skipped instead of landing on a 404.
+  // Offsets are relative to today and run negative into the past, so the launch
+  // day is the floor and 0 is the ceiling.
+  function clampOffset(o: number) {
+    return Math.min(0, Math.max(LAUNCH_DAY - todayIndex(), o));
+  }
+
   function navigate(delta: number) {
-    if (pos < 0) return;
-    const next = days[pos + delta];
-    if (next === undefined) return;
-    setDayIdx(next);
+    setOffset((prev) => clampOffset(prev + delta));
+    setQ('');
+    setDropdownOpen(false);
+  }
+
+  function navigateTo(target: number) {
+    setOffset(clampOffset(target));
     setQ('');
     setDropdownOpen(false);
   }
 
   function goHome() {
-    if (range?.last_day_idx != null) setDayIdx(range.last_day_idx);
-    setQ('');
-    setDropdownOpen(false);
+    navigateTo(0);
     setSideOpen(false);
   }
 
-  // Shared by the archive list and the calendar. Unplayable days are already
-  // rendered locked; this is the backstop.
+  // Shared by the archive list and the calendar; navigateTo clamps out the future
   function goToDay(target: number) {
-    if (!playable.has(target)) return;
-    setDayIdx(target);
-    setQ('');
-    setDropdownOpen(false);
+    navigateTo(target - todayIndex());
     setSideOpen(false);
   }
 
@@ -799,10 +769,12 @@ export default function DSAdle() {
   // ── Archive days ──────────────────────────────────────────────────────────
 
   // Memoised: each entry hits localStorage twice, and this ran on every render
-  // Every scheduled day except the newest, most recent first, capped at 30
   const archiveDays = useMemo(
     () => (mounted
-      ? days.slice(0, -1).reverse().slice(0, 30).map((d) => {
+      // 30 at most, but never further back than launch day
+      ? Array.from({ length: Math.min(30, Math.max(0, todayIndex() - LAUNCH_DAY)) }, (_, i) => {
+          const dayOff = -(i + 1);
+          const d = todayIndex() + dayOff;
           const status = dayStatus(d);
           return {
             dayIdx: d,
@@ -816,7 +788,7 @@ export default function DSAdle() {
     // localStorage, which the linter can't see, so we re-derive whenever the
     // played state changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mounted, days, guesses],
+    [mounted, guesses],
   );
 
   // ── Calendar ──────────────────────────────────────────────────────────────
@@ -824,54 +796,41 @@ export default function DSAdle() {
   // All arithmetic is UTC — day indices are UTC epoch-days, and mixing in local
   // accessors is what shifts dates by one either side of midnight.
   const calendar = useMemo(() => {
-    if (!mounted || !calMonth || !range) return null;
+    if (!mounted || !calMonth) return null;
     const { y, m } = calMonth;
+    const today = todayIndex();
     const firstWeekday = new Date(Date.UTC(y, m, 1)).getUTCDay();
     const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-    const monthOf = (idx: number) => {
-      const d = new Date(idx * 86400000);
-      return d.getUTCFullYear() === y && d.getUTCMonth() === m;
-    };
+    const todayDate = new Date(today * 86400000);
+    const isCurrentMonth = todayDate.getUTCFullYear() === y && todayDate.getUTCMonth() === m;
+    const launchDate = new Date(LAUNCH_DAY * 86400000);
+    const isLaunchMonth = launchDate.getUTCFullYear() === y && launchDate.getUTCMonth() === m;
 
     const cells = Array.from({ length: firstWeekday + daysInMonth }, (_, i) => {
       if (i < firstWeekday) return null;
       const date = i - firstWeekday + 1;
       const d = Date.UTC(y, m, date) / 86400000;
-      // One rule for both ends and for any gap in between: is it scheduled?
-      // `isToday` uses the server's today, so once the bank runs out the real
-      // today is still ringed even though it's locked.
-      // Status only for days that are actually playable: leftover localStorage
-      // from a day that has since fallen outside the schedule would otherwise
-      // paint a win/loss tint on a cell that was never playable.
-      const locked = !playable.has(d);
-      return { date, dayIdx: d, status: locked ? null : dayStatus(d), locked, isToday: d === range.today_day_idx };
+      // Locked at both ends: nothing before launch, nothing after today
+      return { date, dayIdx: d, status: dayStatus(d), locked: d < LAUNCH_DAY || d > today, isToday: d === today };
     });
 
-    return {
-      cells,
-      label: `${MONTHS[m]} ${y}`,
-      // Null bounds mean nothing is scheduled: pin both arrows off rather than
-      // leaving them enabled over a shiftMonth that can't do anything.
-      atLastMonth: range.last_day_idx === null || monthOf(range.last_day_idx),
-      atFirstMonth: range.first_day_idx === null || monthOf(range.first_day_idx),
-    };
+    return { cells, label: `${MONTHS[m]} ${y}`, atCurrentMonth: isCurrentMonth, atLaunchMonth: isLaunchMonth };
     // `guesses` is a localStorage cache key, not a value read above — see archiveDays
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted, calMonth, range, playable, guesses]);
+  }, [mounted, calMonth, guesses]);
 
   // Clamped as well as arrow-disabled, so the button state can't drift from
   // what the function actually permits.
   function shiftMonth(delta: number) {
-    if (!range || range.first_day_idx === null || range.last_day_idx === null) return;
-    const monthStart = (idx: number) => {
-      const d = new Date(idx * 86400000);
-      return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
-    };
-    const first = monthStart(range.first_day_idx);
-    const last = monthStart(range.last_day_idx);
     setCalMonth((prev) => {
       if (!prev) return prev;
       const d = new Date(Date.UTC(prev.y, prev.m + delta, 1));
+      const first = new Date(Date.UTC(
+        new Date(LAUNCH_DAY * 86400000).getUTCFullYear(),
+        new Date(LAUNCH_DAY * 86400000).getUTCMonth(), 1));
+      const last = new Date(Date.UTC(
+        new Date(todayIndex() * 86400000).getUTCFullYear(),
+        new Date(todayIndex() * 86400000).getUTCMonth(), 1));
       const clamped = d < first ? first : d > last ? last : d;
       return { y: clamped.getUTCFullYear(), m: clamped.getUTCMonth() };
     });
@@ -946,14 +905,11 @@ export default function DSAdle() {
 
         {/* Nav row */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'clamp(11px, 3.2vw, 12px)', color: 'var(--text-muted)', marginBottom: 8 }}>
-          <motion.button {...pressable} onClick={() => navigate(-1)} disabled={pos <= 0} style={{ ...navBtnStyle, marginLeft: -8 }}>‹ Prev</motion.button>
+          <motion.button {...pressable} onClick={() => navigate(-1)} disabled={dayIdx <= LAUNCH_DAY} style={{ ...navBtnStyle, marginLeft: -8 }}>‹ Prev</motion.button>
           {/* Takes the slack so the label centres and wraps instead of
-              colliding with the arrows on a narrow screen. Keeps its height
-              while the day is still unknown, so the row doesn't collapse. */}
-          <div style={{ flex: 1, minWidth: 0, textAlign: 'center', fontWeight: 600 }}>
-            {dayIdx === null ? ' ' : `${dateLabel} · ${attemptsLeft} guesses left`}
-          </div>
-          <motion.button {...pressable} onClick={() => navigate(1)} disabled={pos < 0 || pos >= days.length - 1} style={{ ...navBtnStyle, marginRight: -8 }}>Next ›</motion.button>
+              colliding with the arrows on a narrow screen */}
+          <div style={{ flex: 1, minWidth: 0, textAlign: 'center', fontWeight: 600 }}>{dateLabel} · {attemptsLeft} guesses left</div>
+          <motion.button {...pressable} onClick={() => navigate(1)} disabled={offset >= 0} style={{ ...navBtnStyle, marginRight: -8 }}>Next ›</motion.button>
         </div>
 
         {/* Subtitle */}
@@ -973,16 +929,7 @@ export default function DSAdle() {
           </div>
         )}
 
-        {/* No schedule at all — distinct from a backend error, so it gets its
-            own quiet message rather than the red banner */}
-        {noPuzzles && !error && (
-          <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--text-muted)', border: '2px solid var(--border-strong)', borderRadius: 3, padding: '18px clamp(12px, 4vw, 16px)', marginBottom: SECTION_GAP, lineHeight: 1.5 }}>
-            No puzzles are scheduled yet.<br />Give a question a <code>puzzle_date</code> to put it on the calendar.
-          </div>
-        )}
-
         {/* Clue cards */}
-        {!noPuzzles && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'clamp(6px, 2vw, 8px)', marginBottom: SECTION_GAP }}>
           {clues.map((c, i) => (
             // Ref sits on the perspective wrapper, not the trigger inside it —
@@ -1015,7 +962,6 @@ export default function DSAdle() {
             </div>
           ))}
         </div>
-        )}
 
         {/* Wrong guesses */}
         {wrong.length > 0 && (
@@ -1060,7 +1006,7 @@ export default function DSAdle() {
         )}
 
         {/* Guess input */}
-        {!isOver && !noPuzzles && (
+        {!isOver && (
           <div style={{ display: 'flex', gap: 'clamp(6px, 2vw, 8px)', alignItems: 'stretch' }}>
             <div style={{ position: 'relative', flex: 1 }}>
               <input
@@ -1201,11 +1147,7 @@ export default function DSAdle() {
                     style={{ flex: 1, overflowY: 'auto' }}
                   >
                     <motion.div {...pressableRow} onClick={goHome} className="dsadle-hover-bg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: `16px ${SIDE_PAD}`, cursor: 'pointer', borderBottom: '1px solid var(--divider)', fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
-                      {/* Once the schedule runs past today there is no
-                          "today's puzzle" to go to — goHome lands on the
-                          newest one, so say so rather than showing a date
-                          that isn't today. */}
-                      <span>{bankExhausted ? 'Latest Puzzle' : 'Today’s Puzzle'}</span>
+                      <span>Today&apos;s Puzzle</span>
                       <span style={{ color: 'var(--text-muted)' }}>›</span>
                     </motion.div>
                     <motion.div {...pressableRow} onClick={() => setSideView('archive')} className="dsadle-hover-bg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: `16px ${SIDE_PAD}`, cursor: 'pointer', borderBottom: '1px solid var(--divider)', fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
@@ -1264,9 +1206,9 @@ export default function DSAdle() {
                           <div style={{ padding: `10px ${SIDE_PAD} 14px` }}>
                             {/* Month nav */}
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                              <motion.button {...pressable} onClick={() => shiftMonth(-1)} disabled={calendar.atFirstMonth} style={calNavStyle}>‹</motion.button>
+                              <motion.button {...pressable} onClick={() => shiftMonth(-1)} disabled={calendar.atLaunchMonth} style={calNavStyle}>‹</motion.button>
                               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>{calendar.label}</div>
-                              <motion.button {...pressable} onClick={() => shiftMonth(1)} disabled={calendar.atLastMonth} style={calNavStyle}>›</motion.button>
+                              <motion.button {...pressable} onClick={() => shiftMonth(1)} disabled={calendar.atCurrentMonth} style={calNavStyle}>›</motion.button>
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
