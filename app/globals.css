@@ -98,6 +98,18 @@ body {
 .dsadle-hover-yellow:hover { background-color: #dea123 !important; }
 .dsadle-hover-green:hover { background-color: #1aab29 !important; }
 
+/* Calendar day hover, split by status on purpose: a flat tint would paint over
+   the won/lost fills, which are the only thing the grid is there to show.
+   :not(:disabled) leaves out-of-range days inert.
+   --surface-hi rather than --row-hover: the cells are ~11px squares, and the
+   row-hover step (#f4f4f4 on white) is too faint to find at that size. */
+.dsadle-cal-day:not(:disabled):not([data-status]):hover {
+  background-color: var(--surface-hi) !important;
+}
+.dsadle-cal-day:not(:disabled)[data-status]:hover {
+  filter: brightness(1.15);
+}
+
 input::placeholder {
   color: var(--text-muted);
 }

@@ -1,3 +1,6 @@
+import time
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -9,6 +12,20 @@ from database import get_db
 router = APIRouter(prefix="/api/game", tags=["game"])
 
 MAX_GUESSES = 5
+
+# Day one. _answer_for_day wraps with `day_idx % n`, so without this floor every
+# date back to 1970 (and every negative index) returns a real puzzle.
+# Mirrored by LAUNCH_DAY in components/DSAdle.tsx — change both.
+LAUNCH_DAY_IDX = (date(2026, 6, 21) - date(1970, 1, 1)).days  # 20625
+
+
+def _check_day(day_idx: int) -> None:
+    today = int(time.time() // 86400)
+    # One day of slack at the top: the client derives its index from the browser
+    # clock, so a player just past UTC midnight — or with a fast clock — would
+    # otherwise get a 404 for what is legitimately today's puzzle.
+    if day_idx < LAUNCH_DAY_IDX or day_idx > today + 1:
+        raise HTTPException(status_code=404, detail="No puzzle for that day")
 
 
 def _all_questions(db: Session) -> list[models.Question]:
@@ -31,6 +48,7 @@ def list_names(db: Session = Depends(get_db)):
 @router.get("/daily/{day_idx}", response_model=schemas.DailyOut)
 def daily(day_idx: int, db: Session = Depends(get_db)):
     """The clues for a given day. Never includes the answer's name or description."""
+    _check_day(day_idx)
     answer = _answer_for_day(_all_questions(db), day_idx)
     return schemas.DailyOut(
         day_idx=day_idx,
@@ -53,6 +71,7 @@ def guess(req: schemas.GuessRequest, db: Session = Depends(get_db)):
     The answer is revealed only once the game is over (won, or 5 guesses used
     — at which point the player would see it in the UI anyway).
     """
+    _check_day(req.day_idx)
     questions = _all_questions(db)
     answer = _answer_for_day(questions, req.day_idx)
 

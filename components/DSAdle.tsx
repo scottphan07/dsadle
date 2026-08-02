@@ -7,6 +7,12 @@ import { fetchNames, fetchDaily, submitGuesses, DailyClues, Reveal } from '@/lib
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
 const MAX_GUESSES = 5;
 
+// Day one. Everything before it is unplayable — the backend picks its answer
+// with `day_idx % n`, so without a floor every date back to 1970 returns a real
+// puzzle. Mirrored by LAUNCH_DAY_IDX in backend/routers/game.py; change both.
+// Month is 0-based: 5 is June.
+const LAUNCH_DAY = Math.floor(Date.UTC(2026, 5, 21) / 86400000); // 2026-06-21
+
 // ─── Layout ────────────────────────────────────────────────────────────────
 
 // Everything here is styled inline, and inline styles can't carry media
@@ -668,14 +674,20 @@ export default function DSAdle() {
     }
   }
 
+  // Offsets are relative to today and run negative into the past, so the launch
+  // day is the floor and 0 is the ceiling.
+  function clampOffset(o: number) {
+    return Math.min(0, Math.max(LAUNCH_DAY - todayIndex(), o));
+  }
+
   function navigate(delta: number) {
-    setOffset((prev) => Math.min(0, prev + delta));
+    setOffset((prev) => clampOffset(prev + delta));
     setQ('');
     setDropdownOpen(false);
   }
 
   function navigateTo(target: number) {
-    setOffset(Math.min(0, target));
+    setOffset(clampOffset(target));
     setQ('');
     setDropdownOpen(false);
   }
@@ -759,7 +771,8 @@ export default function DSAdle() {
   // Memoised: each entry hits localStorage twice, and this ran on every render
   const archiveDays = useMemo(
     () => (mounted
-      ? Array.from({ length: 30 }, (_, i) => {
+      // 30 at most, but never further back than launch day
+      ? Array.from({ length: Math.min(30, Math.max(0, todayIndex() - LAUNCH_DAY)) }, (_, i) => {
           const dayOff = -(i + 1);
           const d = todayIndex() + dayOff;
           const status = dayStatus(d);
@@ -790,24 +803,36 @@ export default function DSAdle() {
     const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
     const todayDate = new Date(today * 86400000);
     const isCurrentMonth = todayDate.getUTCFullYear() === y && todayDate.getUTCMonth() === m;
+    const launchDate = new Date(LAUNCH_DAY * 86400000);
+    const isLaunchMonth = launchDate.getUTCFullYear() === y && launchDate.getUTCMonth() === m;
 
     const cells = Array.from({ length: firstWeekday + daysInMonth }, (_, i) => {
       if (i < firstWeekday) return null;
       const date = i - firstWeekday + 1;
       const d = Date.UTC(y, m, date) / 86400000;
-      return { date, dayIdx: d, status: dayStatus(d), future: d > today, isToday: d === today };
+      // Locked at both ends: nothing before launch, nothing after today
+      return { date, dayIdx: d, status: dayStatus(d), locked: d < LAUNCH_DAY || d > today, isToday: d === today };
     });
 
-    return { cells, label: `${MONTHS[m]} ${y}`, atCurrentMonth: isCurrentMonth };
+    return { cells, label: `${MONTHS[m]} ${y}`, atCurrentMonth: isCurrentMonth, atLaunchMonth: isLaunchMonth };
     // `guesses` is a localStorage cache key, not a value read above — see archiveDays
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted, calMonth, guesses]);
 
+  // Clamped as well as arrow-disabled, so the button state can't drift from
+  // what the function actually permits.
   function shiftMonth(delta: number) {
     setCalMonth((prev) => {
       if (!prev) return prev;
       const d = new Date(Date.UTC(prev.y, prev.m + delta, 1));
-      return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
+      const first = new Date(Date.UTC(
+        new Date(LAUNCH_DAY * 86400000).getUTCFullYear(),
+        new Date(LAUNCH_DAY * 86400000).getUTCMonth(), 1));
+      const last = new Date(Date.UTC(
+        new Date(todayIndex() * 86400000).getUTCFullYear(),
+        new Date(todayIndex() * 86400000).getUTCMonth(), 1));
+      const clamped = d < first ? first : d > last ? last : d;
+      return { y: clamped.getUTCFullYear(), m: clamped.getUTCMonth() };
     });
   }
 
@@ -880,7 +905,7 @@ export default function DSAdle() {
 
         {/* Nav row */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'clamp(11px, 3.2vw, 12px)', color: 'var(--text-muted)', marginBottom: 8 }}>
-          <motion.button {...pressable} onClick={() => navigate(-1)} style={{ ...navBtnStyle, marginLeft: -8 }}>‹ Prev</motion.button>
+          <motion.button {...pressable} onClick={() => navigate(-1)} disabled={dayIdx <= LAUNCH_DAY} style={{ ...navBtnStyle, marginLeft: -8 }}>‹ Prev</motion.button>
           {/* Takes the slack so the label centres and wraps instead of
               colliding with the arrows on a narrow screen */}
           <div style={{ flex: 1, minWidth: 0, textAlign: 'center', fontWeight: 600 }}>{dateLabel} · {attemptsLeft} guesses left</div>
@@ -1181,7 +1206,7 @@ export default function DSAdle() {
                           <div style={{ padding: `10px ${SIDE_PAD} 14px` }}>
                             {/* Month nav */}
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                              <motion.button {...pressable} onClick={() => shiftMonth(-1)} style={calNavStyle}>‹</motion.button>
+                              <motion.button {...pressable} onClick={() => shiftMonth(-1)} disabled={calendar.atLaunchMonth} style={calNavStyle}>‹</motion.button>
                               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>{calendar.label}</div>
                               <motion.button {...pressable} onClick={() => shiftMonth(1)} disabled={calendar.atCurrentMonth} style={calNavStyle}>›</motion.button>
                             </div>
@@ -1207,14 +1232,18 @@ export default function DSAdle() {
                                   return (
                                     <motion.button
                                       key={i}
-                                      {...(cell.future ? {} : pressable)}
+                                      {...(cell.locked ? {} : pressable)}
+                                      className="dsadle-cal-day"
+                                      /* Absent, not empty, on unplayed days — that's what
+                                         :not([data-status]) keys the tint off */
+                                      data-status={cell.status ?? undefined}
                                       onClick={() => goToDay(cell.dayIdx)}
-                                      disabled={cell.future}
+                                      disabled={cell.locked}
                                       title={labelForDay(cell.dayIdx)}
                                       style={{
                                         aspectRatio: '1', border: selected ? '2px solid var(--text)' : cell.isToday ? '1px solid var(--border-strong)' : '1px solid transparent',
                                         borderRadius: 3, fontSize: 11, fontWeight: 700, fontFamily: FONT, padding: 0,
-                                        cursor: cell.future ? 'default' : 'pointer',
+                                        cursor: cell.locked ? 'default' : 'pointer',
                                         background: cell.status === 'won' ? 'var(--accent-won)' : cell.status === 'lost' ? 'var(--accent-lost)' : 'transparent',
                                         color: cell.status ? 'var(--on-accent)' : 'var(--text)',
                                       }}
