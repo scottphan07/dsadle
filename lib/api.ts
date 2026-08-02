@@ -18,6 +18,16 @@ export interface Reveal {
   description: string;
 }
 
+// Which days are actually playable. `day_idxs` is the full sorted list rather
+// than just the endpoints, so the calendar stays correct if the schedule has
+// gaps. Null endpoints / empty list mean nothing is scheduled yet.
+export interface DayRange {
+  first_day_idx: number | null;
+  last_day_idx: number | null;
+  today_day_idx: number;
+  day_idxs: number[];
+}
+
 export interface GuessResponse {
   results: boolean[];
   won: boolean;
@@ -35,6 +45,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function fetchNames(): Promise<string[]> {
   return request<string[]>('/api/game/names');
+}
+
+export function fetchRange(): Promise<DayRange> {
+  return request<DayRange>('/api/game/range');
 }
 
 export function fetchDaily(dayIdx: number): Promise<DailyResponse> {

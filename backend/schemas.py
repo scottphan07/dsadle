@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,6 +17,11 @@ class QuestionBase(BaseModel):
     use_case: str = Field(min_length=1)
     description: str = Field(min_length=1)
     code: str = "# implementation coming soon"
+    # The day this question is the answer for. Unique; omit or send null to
+    # leave it unscheduled. Inherited by QuestionOut, so admins read the
+    # schedule back — deliberately absent from DailyClues, which is how the
+    # answer-identifying fields stay structurally unable to leak.
+    puzzle_date: Optional[date] = None
 
 
 class QuestionCreate(QuestionBase):
@@ -35,6 +41,9 @@ class QuestionUpdate(BaseModel):
     use_case: Optional[str] = None
     description: Optional[str] = None
     code: Optional[str] = None
+    # model_dump(exclude_unset=True) distinguishes "omitted" from "sent as
+    # null", so an explicit null here unschedules the question.
+    puzzle_date: Optional[date] = None
 
 
 class QuestionOut(QuestionBase):
@@ -57,6 +66,21 @@ class DailyClues(BaseModel):
 class DailyOut(BaseModel):
     day_idx: int
     clues: DailyClues
+
+
+class DayRangeOut(BaseModel):
+    """Which days are actually playable — the calendar's source of truth.
+
+    `day_idxs` is the full sorted list rather than just the endpoints so the
+    UI stays correct when the schedule has gaps (a deleted or rescheduled
+    question); first/last are conveniences derived from it. All three are
+    null/empty when nothing is scheduled yet.
+    """
+
+    first_day_idx: Optional[int]
+    last_day_idx: Optional[int]
+    today_day_idx: int  # server-side today, so the UI needn't trust the browser clock
+    day_idxs: list[int]
 
 
 class GuessRequest(BaseModel):

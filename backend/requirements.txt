@@ -1,3 +1,13 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
-SQLAlchemy>=2.0
+# Pinned so the deploy host resolves the same versions as local. Direct
+# dependencies only — transitives are left to the resolver, which keeps this
+# portable across interpreter versions (a full `pip freeze` taken on one Python
+# tends not to install cleanly on another).
+#
+# Plain `uvicorn`, not `uvicorn[standard]`: the extra pulls compiled uvloop and
+# httptools (the likeliest wheel-availability failure on a host) plus unused
+# websockets. `--reload` still works without it — uvicorn falls back from
+# WatchFilesReload to StatReload (polling). For faster local reloads:
+#   pip install 'uvicorn[standard]'
+fastapi==0.141.1
+uvicorn==0.52.0
+SQLAlchemy==2.0.51

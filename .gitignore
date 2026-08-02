@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...but the examples are documentation and must ship. `.env*` matches at any
+# depth, so without these the example files are silently skipped by `git add`.
+!.env.example
+!backend/.env.example
 
 # vercel
 .vercel
@@ -41,10 +45,25 @@ yarn-error.log*
 next-env.d.ts
 
 # python backend
+#
+# These rules used to live in backend/.gitignore, which venv had auto-written as
+# a blanket `*` — that ignored every file under backend/, so any NEW file there
+# was silently skipped by `git add`. Keeping them here instead means a future
+# `python -m venv .venv` can't clobber them (it writes a self-contained
+# .venv/.gitignore).
 backend/.venv/
-backend/dsadle.db
+# the db itself, plus .db.bak and any -wal / -shm sidecars
+backend/dsadle.db*
 backend/__pycache__/
 backend/**/__pycache__/
+# A venv was also created directly into backend/ itself; its bin/python is an
+# absolute symlink into /Library/Frameworks, so it is host-specific junk.
+backend/bin/
+backend/include/
+backend/lib/
+backend/lib64
+backend/share/
+backend/pyvenv.cfg
 
 # local-only notes (kept on disk, deliberately not pushed)
 ARCHITECTURE.md
