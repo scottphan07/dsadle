@@ -130,6 +130,18 @@ function saveTheme(t: Theme): void {
   } catch {}
 }
 
+// True once the toggle has been used. Gates the OS listener below: a stored
+// choice outranks the system preference, exactly as in the layout.tsx script.
+function hasStoredTheme(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const t = localStorage.getItem('dsadle-theme');
+    return t === 'light' || t === 'dark';
+  } catch {
+    return false;
+  }
+}
+
 // 'lost' also covers games left in progress — anything attempted but not won
 function dayStatus(dayIdx: number): 'won' | 'lost' | null {
   if (readResult(dayIdx) === 'won') return 'won';
@@ -357,6 +369,23 @@ export default function DSAdle() {
     load();
     return () => { cancelled = true; };
   }, [offset, retryTick]);
+
+  // Follow the OS while the tab is open — covers the auto light/dark switch
+  // macOS and Windows perform at sunset. Deliberately does not saveTheme: a
+  // system change is not a user choice, so the page stays on "follow the OS"
+  // rather than silently locking itself to whatever the OS happened to be.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    function onChange(e: MediaQueryListEvent) {
+      if (hasStoredTheme()) return;
+      const next: Theme = e.matches ? 'dark' : 'light';
+      setTheme(next);
+      document.documentElement.setAttribute('data-theme', next);
+    }
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
 
   // ── Derived values ────────────────────────────────────────────────────────
 
