@@ -45,3 +45,6 @@ backend/.venv/
 backend/dsadle.db
 backend/__pycache__/
 backend/**/__pycache__/
+
+# local-only notes (kept on disk, deliberately not pushed)
+ARCHITECTURE.md
