@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, KeyboardEvent, CSSProperties } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { fetchNames, fetchDaily, submitGuesses, DailyClues, Reveal } from '@/lib/api';
+import { fetchNames, fetchDaily, submitGuesses, ApiError, DailyClues, Reveal } from '@/lib/api';
 
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
 const MAX_GUESSES = 5;
@@ -92,24 +92,31 @@ function keyForDay(dayIdx: number): string {
   return 'dsadle-' + dayIdx;
 }
 
-function keyFor(offset: number): string {
-  return keyForDay(todayIndex() + offset);
-}
-
 function readGuesses(key: string): string[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as string[]) : [];
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    // `as string[]` asserted a type without checking one. A stored `null` or
+    // `"Heap"` parses fine, then throws during render ("guesses.filter is not
+    // a function") — and because the bad value stays on disk, every reload
+    // crashed identically with no way out but clearing site data.
+    if (!Array.isArray(parsed) || !parsed.every((x) => typeof x === 'string')) return [];
+    // Still an assertion, but now a checked one — the line above is the proof.
+    return parsed as string[];
   } catch {
     return [];
   }
 }
 
-function saveGuesses(names: string[], offset: number): void {
+// Takes an absolute day index, not an offset: deriving the day inside the
+// setter meant a write that straddled UTC midnight landed under a different
+// key than the read it was meant to update.
+function saveGuesses(names: string[], dayIdx: number): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(keyFor(offset), JSON.stringify(names));
+    localStorage.setItem(keyForDay(dayIdx), JSON.stringify(names));
   } catch {}
 }
 
@@ -138,8 +145,16 @@ const LIGHT_COLORS = ['#ff5f57', '#febc2e', '#28c840'];
 
 function readResult(dayIdx: number): 'won' | 'lost' | null {
   if (typeof window === 'undefined') return null;
-  const raw = localStorage.getItem('dsadle-result-' + dayIdx);
-  return raw === 'won' || raw === 'lost' ? raw : null;
+  try {
+    const raw = localStorage.getItem('dsadle-result-' + dayIdx);
+    return raw === 'won' || raw === 'lost' ? raw : null;
+  } catch {
+    // Reading localStorage THROWS rather than returning null when site data is
+    // blocked (Chrome's "Block all cookies", some embedded contexts). This runs
+    // during render via dayStatus -> archiveDays, so an unguarded throw takes
+    // the whole page down instead of degrading to "no saved result".
+    return null;
+  }
 }
 
 function saveResult(dayIdx: number, result: 'won' | 'lost'): void {
@@ -504,6 +519,24 @@ export default function DSAdle() {
   // theme script.
   const [theme, setTheme] = useState<Theme>(readTheme);
 
+  // Today's epoch-day index, held in state rather than recomputed during
+  // render. Deriving it inline meant any re-render after UTC midnight (7pm
+  // Central — peak play time) silently advanced dayIdx while `daily` still
+  // held the previous day's clues: guesses were scored against tomorrow's
+  // answer and saved under tomorrow's key. Promoting the rollover to a state
+  // change re-runs the load effect, which swaps the puzzle in properly.
+  const [todayIdx, setTodayIdx] = useState(todayIndex);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setTodayIdx((prev) => {
+        const now = todayIndex();
+        return now === prev ? prev : now;
+      });
+    }, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
   const reduceMotion = useReducedMotion();
 
   // Measured at animation time, never cached — the page can scroll while the
@@ -517,7 +550,7 @@ export default function DSAdle() {
     setMounted(true);
     setCalMonth((prev) => {
       if (prev) return prev;
-      const d = new Date(todayIndex() * 86400000);
+      const d = new Date(todayIdx * 86400000);
       return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
     });
     let cancelled = false;
@@ -527,8 +560,8 @@ export default function DSAdle() {
       setDaily(null);
       setResults([]);
       setReveal(null);
-      const dayIdx = todayIndex() + offset;
-      const saved = readGuesses(keyFor(offset));
+      const dayIdx = todayIdx + offset;
+      const saved = readGuesses(keyForDay(dayIdx));
       setGuesses(saved);
       try {
         const [nm, d] = await Promise.all([fetchNames(), fetchDaily(dayIdx)]);
@@ -541,11 +574,18 @@ export default function DSAdle() {
             if (cancelled) return;
             setResults(r.results);
             setReveal(r.reveal);
-          } catch {
-            // Saved guesses reference names no longer in the question bank
+          } catch (err) {
             if (cancelled) return;
-            setGuesses([]);
-            saveGuesses([], offset);
+            // Only a 4xx means the saved guesses are genuinely invalid — e.g. a
+            // name that's no longer in the question bank. A 5xx or a dropped
+            // connection is transient, and wiping on those deleted real games
+            // every time the free-tier instance cycled mid-restore.
+            if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+              setGuesses([]);
+              saveGuesses([], dayIdx);
+            } else {
+              setError('Could not restore your saved game — your progress is safe. Retry in a moment.');
+            }
           }
         }
       } catch {
@@ -556,7 +596,7 @@ export default function DSAdle() {
     }
     load();
     return () => { cancelled = true; };
-  }, [offset, retryTick]);
+  }, [offset, retryTick, todayIdx]);
 
   // Follow the OS while the tab is open — covers the auto light/dark switch
   // macOS and Windows perform at sunset. Deliberately does not saveTheme: a
@@ -577,7 +617,7 @@ export default function DSAdle() {
 
   // ── Derived values ────────────────────────────────────────────────────────
 
-  const dayIdx = todayIndex() + offset;
+  const dayIdx = todayIdx + offset;
   const won = results.some(Boolean);
   const isOver = won || guesses.length >= MAX_GUESSES;
   const wrong = guesses.filter((_, i) => results[i] === false);
@@ -626,7 +666,7 @@ export default function DSAdle() {
       setGuesses(next);
       setResults(r.results);
       setReveal(r.reveal);
-      saveGuesses(next, offset);
+      saveGuesses(next, dayIdx);
       if (r.game_over) saveResult(dayIdx, r.won ? 'won' : 'lost');
       setError(null);
       setQ('');
@@ -677,7 +717,7 @@ export default function DSAdle() {
   // Offsets are relative to today and run negative into the past, so the launch
   // day is the floor and 0 is the ceiling.
   function clampOffset(o: number) {
-    return Math.min(0, Math.max(LAUNCH_DAY - todayIndex(), o));
+    return Math.min(0, Math.max(LAUNCH_DAY - todayIdx, o));
   }
 
   function navigate(delta: number) {
@@ -699,7 +739,7 @@ export default function DSAdle() {
 
   // Shared by the archive list and the calendar; navigateTo clamps out the future
   function goToDay(target: number) {
-    navigateTo(target - todayIndex());
+    navigateTo(target - todayIdx);
     setSideOpen(false);
   }
 
@@ -772,9 +812,9 @@ export default function DSAdle() {
   const archiveDays = useMemo(
     () => (mounted
       // 30 at most, but never further back than launch day
-      ? Array.from({ length: Math.min(30, Math.max(0, todayIndex() - LAUNCH_DAY)) }, (_, i) => {
+      ? Array.from({ length: Math.min(30, Math.max(0, todayIdx - LAUNCH_DAY)) }, (_, i) => {
           const dayOff = -(i + 1);
-          const d = todayIndex() + dayOff;
+          const d = todayIdx + dayOff;
           const status = dayStatus(d);
           return {
             dayIdx: d,
@@ -788,7 +828,7 @@ export default function DSAdle() {
     // localStorage, which the linter can't see, so we re-derive whenever the
     // played state changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mounted, guesses],
+    [mounted, guesses, todayIdx],
   );
 
   // ── Calendar ──────────────────────────────────────────────────────────────
@@ -798,7 +838,7 @@ export default function DSAdle() {
   const calendar = useMemo(() => {
     if (!mounted || !calMonth) return null;
     const { y, m } = calMonth;
-    const today = todayIndex();
+    const today = todayIdx;
     const firstWeekday = new Date(Date.UTC(y, m, 1)).getUTCDay();
     const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
     const todayDate = new Date(today * 86400000);
@@ -817,7 +857,7 @@ export default function DSAdle() {
     return { cells, label: `${MONTHS[m]} ${y}`, atCurrentMonth: isCurrentMonth, atLaunchMonth: isLaunchMonth };
     // `guesses` is a localStorage cache key, not a value read above — see archiveDays
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted, calMonth, guesses]);
+  }, [mounted, calMonth, guesses, todayIdx]);
 
   // Clamped as well as arrow-disabled, so the button state can't drift from
   // what the function actually permits.
@@ -829,8 +869,8 @@ export default function DSAdle() {
         new Date(LAUNCH_DAY * 86400000).getUTCFullYear(),
         new Date(LAUNCH_DAY * 86400000).getUTCMonth(), 1));
       const last = new Date(Date.UTC(
-        new Date(todayIndex() * 86400000).getUTCFullYear(),
-        new Date(todayIndex() * 86400000).getUTCMonth(), 1));
+        new Date(todayIdx * 86400000).getUTCFullYear(),
+        new Date(todayIdx * 86400000).getUTCMonth(), 1));
       const clamped = d < first ? first : d > last ? last : d;
       return { y: clamped.getUTCFullYear(), m: clamped.getUTCMonth() };
     });

@@ -35,10 +35,24 @@ export interface GuessResponse {
   reveal: Reveal | null;
 }
 
+// Carries the status code so callers can tell "your saved data is invalid"
+// (4xx) from "the server is having a moment" (5xx / network). Without this,
+// every failure looked identical and the restore path deleted real progress
+// whenever the free-tier backend happened to be restarting.
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, body: string) {
+    super(`API ${status}: ${body}`);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, init);
   if (!res.ok) {
-    throw new Error(`API ${res.status}: ${await res.text()}`);
+    throw new ApiError(res.status, await res.text());
   }
   return res.json() as Promise<T>;
 }
