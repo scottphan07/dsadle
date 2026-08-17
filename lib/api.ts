@@ -18,9 +18,8 @@ export interface Reveal {
   description: string;
 }
 
-// Which days are actually playable. `day_idxs` is the full sorted list rather
-// than just the endpoints, so the calendar stays correct if the schedule has
-// gaps. Null endpoints / empty list mean nothing is scheduled yet.
+// `day_idxs` is the full sorted list, not just the endpoints, so the calendar
+// stays correct when the schedule has gaps. Null endpoints mean nothing is scheduled.
 export interface DayRange {
   first_day_idx: number | null;
   last_day_idx: number | null;
@@ -35,10 +34,8 @@ export interface GuessResponse {
   reveal: Reveal | null;
 }
 
-// Carries the status code so callers can tell "your saved data is invalid"
-// (4xx) from "the server is having a moment" (5xx / network). Without this,
-// every failure looked identical and the restore path deleted real progress
-// whenever the free-tier backend happened to be restarting.
+// Carries the status so callers can tell invalid saved data (4xx) from a
+// struggling server (5xx / network); the restore path discards progress only on 4xx.
 export class ApiError extends Error {
   readonly status: number;
 
@@ -49,14 +46,10 @@ export class ApiError extends Error {
   }
 }
 
-// Render's free tier spins the service down after 15 minutes idle, and the
-// next request waits ~50-60s while the instance boots. So this is deliberately
-// generous: it is not here to fail fast, it is here to bound the browser's
-// ~300s default so a genuinely dead request eventually surfaces as an error
-// with a retry button instead of a spinner that never resolves.
+// Long enough to survive a Render free-tier cold start (~50-60s after 15 min
+// idle); it exists to bound the browser's ~300s default, not to fail fast.
 const TIMEOUT_MS = 90_000;
 
-/** The request exceeded TIMEOUT_MS. */
 export class TimeoutError extends Error {
   constructor() {
     super(`Request timed out after ${TIMEOUT_MS}ms`);
@@ -79,8 +72,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     res = await fetch(`${API_URL}${path}`, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
   } catch (err) {
     // AbortSignal.timeout rejects with a DOMException named 'TimeoutError';
-    // everything else reaching here is a transport failure. Distinguishing the
-    // two is what lets the UI say something true rather than one catch-all.
+    // anything else reaching here is a transport failure.
     if (err instanceof DOMException && err.name === 'TimeoutError') throw new TimeoutError();
     throw new NetworkError(err);
   }

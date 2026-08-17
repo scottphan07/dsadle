@@ -7,9 +7,8 @@ own:
 
 Deliberately DB-free, so it can run while uvicorn holds dsadle.db.
 
-Errors block a write. Warnings and infos are reported and don't — a schedule
-with gaps, or unscheduled questions, or a tell in a code snippet are all
-legitimate choices, but you should see them before they go live.
+Errors block a write; warnings and infos don't — gaps, unscheduled questions and
+tells in a snippet are legitimate choices you should merely see before going live.
 """
 
 from __future__ import annotations
@@ -27,15 +26,13 @@ from schemas import QuestionCreate
 
 SEED_FILE = Path(__file__).resolve().parent / "seed_data.json"
 
-# Exactly the fields routers/game.py assembles into DailyClues — i.e. the text
-# that ships to the browser in the /daily response. `category` is excluded: it
-# is flattened to "Data Structure"/"Algorithm" and can't name the answer.
+# The fields routers/game.py assembles into DailyClues, i.e. the text that ships
+# to the browser. `category` is excluded: it is flattened to "Data Structure"/
+# "Algorithm" and can't name the answer.
 CLUE_FIELDS = ("use_case", "top_operation", "time_complexity", "space_complexity", "code")
 
-# Below this, the runway warning fires
 LOW_RUNWAY_DAYS = 14
 
-# Gaps are listed individually up to here, then summarised
 MAX_LISTED_GAPS = 10
 
 
@@ -43,13 +40,9 @@ class SeedRow(QuestionCreate):
     """QuestionCreate, but rejecting unknown keys.
 
     Reusing the API's own schema keeps seed data and admin-created rows from
-    drifting apart — it already covers the category/difficulty enums, the
-    non-empty string rules, and ISO-string -> date coercion.
-
-    `extra="forbid"` is the one thing added here, and it's the whole point: a
-    typo like "top_operatoin" would otherwise be dropped silently and the row
-    would take the default "Running time" without anyone noticing. Applied only
-    to seeding, so the live API's leniency is unchanged.
+    drifting apart. `extra="forbid"` catches typos like "top_operatoin", which
+    would otherwise be dropped silently and leave the field on its default; it
+    applies to seeding only, so the live API stays lenient.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -67,8 +60,8 @@ class Report:
         return not self.errors
 
     def render(self) -> str:
-        # Errors last: in a terminal the final line sits right above the prompt,
-        # which is the hardest place to miss it.
+        # Errors last: the final line sits right above the prompt, where it is
+        # hardest to miss.
         out = [f"  {line}" for line in self.infos]
         out += [f"  WARNING: {line}" for line in self.warnings]
         out += [f"  ERROR:   {line}" for line in self.errors]
@@ -84,9 +77,8 @@ class Report:
 def _utc_today() -> date:
     """Must match routers/game.py's `int(time.time() // 86400)`.
 
-    date.today() is server-local and would report a different day than the app
-    actually serves whenever the local date and the UTC date disagree — which
-    is most of the evening in the Americas.
+    date.today() is server-local and reports a different day than the app serves
+    whenever the local and UTC dates disagree.
     """
     return datetime.now(timezone.utc).date()
 
@@ -167,8 +159,8 @@ def validate(raw: object, today: date | None = None) -> Report:
             )
         by_date[row.puzzle_date] = row.name
 
-    # Exact duplicates are an error; case-only collisions merely make both
-    # names legal exact-match guesses, which is confusing but playable.
+    # Case-only collisions are a warning, not an error: both names stay legal
+    # exact-match guesses, which is confusing but playable.
     folded: dict[str, str] = {}
     for row in r.rows:
         key = row.name.casefold()

@@ -17,10 +17,9 @@ class QuestionBase(BaseModel):
     use_case: str = Field(min_length=1)
     description: str = Field(min_length=1)
     code: str = "# implementation coming soon"
-    # The day this question is the answer for. Unique; omit or send null to
-    # leave it unscheduled. Inherited by QuestionOut, so admins read the
-    # schedule back — deliberately absent from DailyClues, which is how the
-    # answer-identifying fields stay structurally unable to leak.
+    # Omit or send null to leave the question unscheduled. Inherited by
+    # QuestionOut so admins read the schedule back; absent from DailyClues,
+    # which is how answer-identifying fields stay structurally unable to leak.
     puzzle_date: Optional[date] = None
 
 
@@ -69,12 +68,10 @@ class DailyOut(BaseModel):
 
 
 class DayRangeOut(BaseModel):
-    """Which days are actually playable — the calendar's source of truth.
+    """Which days are playable — the calendar's source of truth.
 
-    `day_idxs` is the full sorted list rather than just the endpoints so the
-    UI stays correct when the schedule has gaps (a deleted or rescheduled
-    question); first/last are conveniences derived from it. All three are
-    null/empty when nothing is scheduled yet.
+    `day_idxs` is the full sorted list, not just the endpoints, so the UI stays
+    correct when the schedule has gaps; first/last are derived from it.
     """
 
     first_day_idx: Optional[int]

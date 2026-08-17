@@ -5,10 +5,8 @@
     python seed.py --dry-run    # do the replace in a transaction, then roll back
     python seed.py --replace    # swap the whole bank for the file's contents
 
-seed_data.json is the source of truth: --replace makes the database disposable,
-which is what lets a deploy re-seed on boot. The flip side is that it discards
-anything created through the admin API, so while authoring a set, edit the file
-rather than Swagger.
+seed_data.json is the source of truth: --replace makes the database disposable so
+a deploy can re-seed on boot, and discards anything created through the admin API.
 
 Validation always runs first (see validate_seed.py); errors abort before any
 write.
@@ -32,8 +30,8 @@ def _rows_or_exit(path: Path) -> list[Question]:
     print(report.render())
     if not report.ok:
         sys.exit(1)
-    # Validated rows already carry a real datetime.date for puzzle_date —
-    # Pydantic coerced the ISO string — so this can go straight to SQLAlchemy.
+    # Pydantic has already coerced puzzle_date from ISO string to date, so these
+    # rows go straight to SQLAlchemy.
     return [Question(**row.model_dump()) for row in report.rows]
 
 
@@ -56,10 +54,9 @@ def seed(path: Path = SEED_FILE, replace: bool = False, dry_run: bool = False) -
         else:
             before = set()
 
-        # Delete and insert in ONE transaction. Within it the old rows are
-        # already gone when the new ones insert, so reusing the same names or
-        # dates can't trip the unique indexes — and a crash rolls back to the
-        # old bank instead of leaving the site with nothing to serve.
+        # Delete and insert in ONE transaction: the old rows are gone before the
+        # new ones insert, so reused names or dates can't trip the unique
+        # indexes, and a crash rolls back to the old bank rather than no bank.
         db.execute(delete(Question))
         db.add_all(questions)
 

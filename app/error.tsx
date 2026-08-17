@@ -3,13 +3,8 @@
 import { useEffect, useState } from 'react';
 
 /**
- * Route-level error boundary.
- *
- * Without this, an uncaught render error shows Next.js's stock "Application
- * error: a client-side exception has occurred" — no context, and no way out
- * when the cause is a value sitting in localStorage, because every reload
- * re-reads it and crashes again. The reset button covers a transient fault;
- * the clear button covers a poisoned save.
+ * Route-level error boundary. Reset covers a transient fault; clearing storage
+ * covers a poisoned localStorage save, which every reload would re-read and crash on.
  */
 export default function Error({
   error,

@@ -15,10 +15,9 @@ MAX_GUESSES = 5
 
 EPOCH = date(1970, 1, 1)
 
-# Days of tolerance above today when resolving a puzzle. Zero: the client no
-# longer derives "today" from its own clock — it anchors on last_day_idx from
-# /range — so there is no skew left to absorb, and any slack here would hand
-# out a scheduled future puzzle early. Set to 1 to restore the old tolerance.
+# Days of tolerance above today when resolving a puzzle. The client anchors on
+# last_day_idx from /range rather than its own clock, so slack here would only
+# hand out a scheduled future puzzle early.
 CLOCK_SKEW_SLACK_DAYS = 0
 
 
@@ -31,9 +30,8 @@ def _idx_for_date(d: date) -> int:
 
 
 def _today_idx() -> int:
-    # Deliberately not date.today(), which is server-local and would roll the
-    # puzzle over at the wrong moment on a machine not set to UTC. This matches
-    # the client's Date.now() / 86400000 exactly.
+    # Not date.today(), which is server-local and rolls the puzzle over at the
+    # wrong moment off UTC. Matches the client's Date.now() / 86400000 exactly.
     return int(time.time() // 86400)
 
 
@@ -44,8 +42,8 @@ def _all_questions(db: Session) -> list[models.Question]:
 def _answer_for_day(db: Session, day_idx: int) -> models.Question:
     """The question scheduled for that day, or 404.
 
-    No lower bound is needed any more: dates before the first scheduled puzzle,
-    gaps in the schedule, and negative indices all simply have no row.
+    No lower bound: dates before the schedule, gaps in it, and negative indices
+    all simply have no row.
     """
     if day_idx > _today_idx() + CLOCK_SKEW_SLACK_DAYS:
         raise HTTPException(status_code=404, detail="No puzzle for that day")
@@ -67,11 +65,9 @@ def list_names(db: Session = Depends(get_db)):
 def day_range(db: Session = Depends(get_db)):
     """Which days are playable. Drives the client's calendar, archive and anchor.
 
-    Days scheduled in the future are filtered out here rather than clamped,
-    which also hides gaps and guarantees this set is exactly the set
-    `/daily/{day_idx}` will serve. An unscheduled bank returns nulls and an
-    empty list, not an error — the UI renders an empty state for that, and a
-    503 would be indistinguishable from the server being down.
+    Future days are filtered out so this set is exactly what `/daily/{day_idx}`
+    serves; an unscheduled bank returns nulls rather than a 503, which the UI
+    could not tell apart from the server being down.
     """
     today = _today_idx()
     scheduled = db.scalars(
@@ -110,8 +106,6 @@ def guess(req: schemas.GuessRequest, db: Session = Depends(get_db)):
 
     Stateless: the client sends every guess it has made so far, so the same
     endpoint validates a new guess and reconstructs a saved game on reload.
-    The answer is revealed only once the game is over (won, or 5 guesses used
-    — at which point the player would see it in the UI anyway).
     """
     answer = _answer_for_day(db, req.day_idx)
 

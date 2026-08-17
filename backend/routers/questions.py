@@ -13,11 +13,8 @@ from database import get_db
 # These endpoints return full rows (name + description) — i.e. every answer — so
 # they require an API key.
 #
-# Outside development this refuses to start rather than falling back to a
-# default. The old fallback meant a deploy that forgot to set API_KEY silently
-# accepted the literal "dev-key", which is printed in the README: anyone could
-# GET /api/questions and read the whole answer bank. Failing at boot puts the
-# reason in the platform's crash log, where it can't be missed.
+# Outside development a missing or default key fails at boot: the dev key is
+# published in the README, so falling back to it would expose the answer bank.
 DEV_KEY = "dev-key"
 APP_ENV = os.environ.get("APP_ENV", "development")
 API_KEY = os.environ.get("API_KEY") or (DEV_KEY if APP_ENV == "development" else None)
@@ -36,8 +33,8 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 def require_api_key(key: str | None = Security(api_key_header)):
-    # compare_digest rather than != so the comparison time doesn't leak how much
-    # of the key was guessed correctly
+    # compare_digest rather than != so timing doesn't leak how much of the key
+    # was guessed correctly
     if key is None or not secrets.compare_digest(key, API_KEY):
         raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key header")
 

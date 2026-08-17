@@ -1,10 +1,8 @@
 @import "tailwindcss";
 
 /* ── Theme tokens ──────────────────────────────────────────────────────────
-   :root is light; [data-theme="dark"] on <html> overrides. There is no
-   prefers-color-scheme block here on purpose — the pre-hydration script in
-   layout.tsx always writes an explicit attribute, so the attribute is the
-   single source of truth. */
+   No prefers-color-scheme block on purpose: layout.tsx always writes an
+   explicit data-theme attribute, so the attribute is the single source of truth. */
 
 :root {
   color-scheme: light;
@@ -32,7 +30,7 @@
   --accent-lost:   #c14b3e;
   --on-accent:     #ffffff;
 
-  /* Filled buttons. Kept separate from --text/--bg because this pair inverts
+  /* Filled buttons. Separate from --text/--bg because this pair inverts
      between themes and the ink pair does not. */
   --btn-bg:        #1a1a1b;
   --btn-fg:        #ffffff;
@@ -90,19 +88,15 @@ body {
   color: var(--text);
 }
 
-/* Hover utilities used by DSAdle. !important is still required — these rows
-   carry an inline `background` that would otherwise win the cascade.
-   The traffic-light colors are fixed macOS brand values, not themed. */
+/* !important is required: these rows carry an inline `background` that would
+   otherwise win the cascade. Traffic-light hexes are macOS brand values, not themed. */
 .dsadle-hover-bg:hover  { background-color: var(--row-hover) !important; }
 .dsadle-hover-red:hover  { background-color: #e0443e !important; }
 .dsadle-hover-yellow:hover { background-color: #dea123 !important; }
 .dsadle-hover-green:hover { background-color: #1aab29 !important; }
 
-/* Calendar day hover, split by status on purpose: a flat tint would paint over
-   the won/lost fills, which are the only thing the grid is there to show.
-   :not(:disabled) leaves out-of-range days inert.
-   --surface-hi rather than --row-hover: the cells are ~11px squares, and the
-   row-hover step (#f4f4f4 on white) is too faint to find at that size. */
+/* Split by status so a flat tint cannot paint over the won/lost fills.
+   --surface-hi, not --row-hover: that step is too faint on ~11px cells. */
 .dsadle-cal-day:not(:disabled):not([data-status]):hover {
   background-color: var(--surface-hi) !important;
 }

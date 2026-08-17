@@ -22,13 +22,10 @@ class Question(Base):
     description: Mapped[str] = mapped_column(Text)
     code: Mapped[str] = mapped_column(Text, default="# implementation coming soon")
 
-    # The date this question is the answer for. Unique, so two questions can't
-    # claim the same day; nullable, so a question can sit in the bank
-    # unscheduled — it stays guessable (it's in /api/game/names) but can never
-    # be the answer. SQLite allows any number of NULLs under a unique index.
-    #
-    # Existing databases need backend/migrate_puzzle_dates.py: create_all()
-    # creates missing tables but never alters an existing one.
+    # Unique, so two questions can't claim the same day; nullable, so a question
+    # can sit in the bank unscheduled — still guessable, never the answer.
+    # create_all() creates missing tables but never alters an existing one, so
+    # existing databases need backend/migrate_puzzle_dates.py.
     puzzle_date: Mapped[Optional[date]] = mapped_column(
         Date, unique=True, index=True, nullable=True, default=None
     )

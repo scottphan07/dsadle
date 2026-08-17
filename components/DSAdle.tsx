@@ -10,48 +10,61 @@ import {
 
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
 
-// How long a load may run before we explain the wait. Short enough that nobody
-// stares at a dead-looking page, long enough that a warm backend (~200ms) never
-// triggers it.
+// Delay before the wait is explained: above a warm backend's ~200ms, below the
+// point where the page reads as dead.
 const SLOW_LOAD_MS = 3000;
 
-// Every failure used to surface as "Is the backend running?" — a question for
-// the developer, not for a stranger on the internet, and identical whether the
-// server was asleep, the day had no puzzle, or the network was down.
-function describeError(err: unknown): string {
-  if (err instanceof TimeoutError) {
-    return 'The server took too long to respond. It may still be waking up — try again in a moment.';
-  }
-  if (err instanceof NetworkError) {
-    return "Couldn't reach the server. Check your connection, then try again.";
-  }
+// Failures are reported twice: the player gets a sentence in the game's voice,
+// the developer gets the status code, error name and original object in the console.
+
+type ErrorContext = 'load' | 'guess' | 'restore';
+
+const ATTEMPTED: Record<ErrorContext, string> = {
+  load: "Couldn't grab the DSAdle",
+  guess: "Couldn't grade your guess",
+  restore: "Couldn't pick your game back up",
+};
+
+// Deliberately vague about the stack: the player can't act on "502 from the
+// origin", and the console carries it for whoever can.
+function reasonFor(err: unknown): string {
+  if (err instanceof TimeoutError) return 'The server is taking a while to wake up.';
+  if (err instanceof NetworkError) return "Can't reach the server right now.";
   if (err instanceof ApiError) {
-    if (err.status === 404) return 'No puzzle is scheduled for this day.';
-    if (err.status >= 500) return 'The server ran into a problem. Try again in a moment.';
+    if (err.status === 404) return "There's no DSAdle scheduled for that day.";
+    if (err.status >= 500) return 'The server ran into a problem.';
+    return 'The server turned down the request.';
   }
-  return "Something went wrong loading today's puzzle.";
+  return 'Something unexpected happened.';
+}
+
+function describeError(context: ErrorContext, err: unknown): string {
+  // A 404 is permanent for that day, so it must not invite a retry.
+  const retryable = !(err instanceof ApiError && err.status === 404);
+  return `${ATTEMPTED[context]}. ${reasonFor(err)}${retryable ? ' Try again in a moment.' : ''}`;
+}
+
+/** The developer half of an error report; read it in the DevTools console. */
+function logError(context: ErrorContext, err: unknown): void {
+  const detail =
+    err instanceof ApiError
+      ? `ApiError ${err.status} — ${err.message}`
+      : err instanceof Error
+        ? `${err.name} — ${err.message}`
+        : String(err);
+  console.error(`[DSAdle] ${context} failed: ${detail}`, err);
 }
 const MAX_GUESSES = 5;
 
-// Day one: the floor for the archive, the calendar, and Prev navigation.
-//
-// Must match the EARLIEST puzzle_date in backend/seed_data.json. The backend no
-// longer derives an answer arithmetically (the old `day_idx % n`, which made
-// every date back to 1970 return a real puzzle) — it looks up the row whose
-// puzzle_date matches, and 404s when there isn't one. So a LAUNCH_DAY earlier
-// than the first scheduled puzzle doesn't break the API, it just offers the
-// player a pile of archive days that all error.
-//
-// Month is 0-based: 7 is August.
+// Day one: the floor for the archive, the calendar and Prev navigation. Must match
+// the earliest puzzle_date in backend/seed_data.json — earlier days 404. Month is 0-based.
 const LAUNCH_DAY = Math.floor(Date.UTC(2026, 7, 17) / 86400000); // 2026-08-17
 
 // ─── Layout ────────────────────────────────────────────────────────────────
 
-// Everything here is styled inline, and inline styles can't carry media
-// queries — clamp()/min() do the responsive work instead.
+// Inline styles can't carry media queries, so clamp()/min() do the responsive work.
 const GUTTER = 'clamp(16px, 4vw, 32px)';
-// The reading column is 520px wide; the max-width carries its own gutter so the
-// content inside stays 488px at desktop, exactly as before.
+// Carries its own gutter, so the reading column inside stays 488px at desktop.
 const CONTENT_MAX = 552;
 const SECTION_GAP = 'clamp(12px, 3.5vw, 18px)';
 
@@ -61,8 +74,7 @@ const contentColumn: CSSProperties = {
   paddingInline: GUTTER, boxSizing: 'border-box',
 };
 
-// Both header slots reserve the same box, which is what keeps the wordmark
-// centred in the middle grid column.
+// Both header slots reserve the same box, which centres the wordmark.
 const HEADER_SLOT = 40;
 
 // Horizontal padding shared by every sidebar row
@@ -95,13 +107,11 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
 const SPRING = { type: 'spring', stiffness: 300, damping: 28 } as const;
 const EASE_OUT = { duration: 0.28, ease: [0.22, 1, 0.36, 1] } as const;
 const INSTANT = { duration: 0 } as const;
-// Minimize/restore: the window warps into the trigger that opened it. Long
-// enough that the staggered rows read as a curve rather than a blur.
+// Warp duration: long enough that the staggered rows read as a curve, not a blur.
 const GENIE_MS = 200;
 // Duration-based spring: `duration`/`bounce` replace stiffness/damping, never mix the two
 const FLIP = { type: 'spring', duration: 0.8, bounce: 0.18 } as const;
 
-// Spread onto any clickable control for consistent press feedback
 const pressable = {
   whileHover: { scale: 1.03 },
   whileTap: { scale: 0.94 },
@@ -130,21 +140,18 @@ function readGuesses(key: string): string[] {
     const raw = localStorage.getItem(key);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    // `as string[]` asserted a type without checking one. A stored `null` or
-    // `"Heap"` parses fine, then throws during render ("guesses.filter is not
-    // a function") — and because the bad value stays on disk, every reload
-    // crashed identically with no way out but clearing site data.
+    // A corrupt stored value persists, so an unchecked cast here would throw
+    // during render on every reload.
     if (!Array.isArray(parsed) || !parsed.every((x) => typeof x === 'string')) return [];
-    // Still an assertion, but now a checked one — the line above is the proof.
+    // Checked assertion — the guard above is its proof.
     return parsed as string[];
   } catch {
     return [];
   }
 }
 
-// Takes an absolute day index, not an offset: deriving the day inside the
-// setter meant a write that straddled UTC midnight landed under a different
-// key than the read it was meant to update.
+// Takes an absolute day index, not an offset, so a write straddling UTC midnight
+// still lands under the key its read came from.
 function saveGuesses(names: string[], dayIdx: number): void {
   if (typeof window === 'undefined') return;
   try {
@@ -154,8 +161,7 @@ function saveGuesses(names: string[], dayIdx: number): void {
 
 // ─── Modal chrome ──────────────────────────────────────────────────────────
 
-// Shared by the real window and by the animating copy, so the two can't drift
-// apart visually.
+// Shared by the real window and the animating copy so the two can't drift apart.
 const MODAL_HEADER_STYLE: CSSProperties = {
   display: 'flex', alignItems: 'center', padding: '13px clamp(12px, 4vw, 18px)',
   background: '#2a2a30', borderBottom: '1px solid #3a3a42', flexShrink: 0,
@@ -181,10 +187,8 @@ function readResult(dayIdx: number): 'won' | 'lost' | null {
     const raw = localStorage.getItem('dsadle-result-' + dayIdx);
     return raw === 'won' || raw === 'lost' ? raw : null;
   } catch {
-    // Reading localStorage THROWS rather than returning null when site data is
-    // blocked (Chrome's "Block all cookies", some embedded contexts). This runs
-    // during render via dayStatus -> archiveDays, so an unguarded throw takes
-    // the whole page down instead of degrading to "no saved result".
+    // localStorage throws rather than returning null when site data is blocked,
+    // and this runs during render — an unguarded throw would take the page down.
     return null;
   }
 }
@@ -200,10 +204,8 @@ function saveResult(dayIdx: number, result: 'won' | 'lost'): void {
 
 type Theme = 'light' | 'dark';
 
-// Reads the DOM attribute rather than localStorage: the inline script in
-// layout.tsx has already resolved stored-choice vs. OS preference before first
-// paint, so the attribute is the one value that can't disagree with what the
-// user is looking at.
+// Reads the DOM attribute, not localStorage: layout.tsx's inline script already
+// resolved stored choice vs. OS preference before first paint.
 function readTheme(): Theme {
   if (typeof document === 'undefined') return 'light';
   return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
@@ -216,8 +218,8 @@ function saveTheme(t: Theme): void {
   } catch {}
 }
 
-// True once the toggle has been used. Gates the OS listener below: a stored
-// choice outranks the system preference, exactly as in the layout.tsx script.
+// Gates the OS listener below: a stored choice outranks the system preference,
+// matching the layout.tsx script.
 function hasStoredTheme(): boolean {
   if (typeof window === 'undefined') return false;
   try {
@@ -240,8 +242,8 @@ function labelForDay(dayIdx: number): string {
 
 // ─── macOS traffic light ───────────────────────────────────────────────────
 
-// Circle plus a glyph that fades in with the group hover, matching how macOS
-// reveals all three symbols whenever the pointer is anywhere over the cluster.
+// The glyph fades in with the group hover, matching how macOS reveals all three
+// symbols whenever the pointer is over the cluster.
 function TrafficLight({ color, glyphColor, hoverClass, title, onClick, visible, children }: {
   color: string;
   glyphColor: string;
@@ -281,16 +283,14 @@ function TrafficLight({ color, glyphColor, hoverClass, title, onClick, visible, 
 
 const TRACK_W = 44, TRACK_H = 26, KNOB = 22, PAD = 2;
 const KNOB_TRAVEL = TRACK_W - PAD * 2 - KNOB;
-// Literal, not tokens: Motion can't interpolate a CSS variable, and "on" always
-// means dark mode, so this pair never varies by theme.
+// Literals, not tokens: Motion can't interpolate a CSS variable, and "on" always
+// means dark mode.
 const TRACK_OFF = '#d3d6da', TRACK_ON = '#34c759';
-// The pressable feel, damped a little harder so the knob settles instead of
-// overshooting past the end of the track.
+// Damped harder than `pressable` so the knob settles instead of overshooting.
 const SWITCH_SPRING = { type: 'spring', stiffness: 500, damping: 32 } as const;
 
-// iOS-style toggle. The knob animates `x` rather than `layout` — this lives
-// inside the sidebar, which is itself a motion.div translating on x, and layout
-// projection inside a transforming ancestor is what makes knobs jitter.
+// The knob animates `x` rather than `layout`: layout projection inside the
+// sidebar's own x-translating motion.div jitters.
 function Switch({ checked, onChange, label, reduceMotion }: {
   checked: boolean;
   onChange: (next: boolean) => void;
@@ -336,11 +336,8 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const easeInQuad = (t: number) => t * t;
 
-// A canvas transform can only move the whole window as one piece — the genie
-// needs each row to move on its own schedule, so the window has to become
-// pixels first. Everything is read off the live DOM rather than restated here:
-// the modal's paddings and font sizes are clamp() values that only resolve at
-// runtime, and a second copy of them would drift.
+// Rasterised first because the genie moves each row separately, which a canvas
+// transform can't. Styles are read live: the modal's clamp() values resolve at runtime.
 function paintWindow(box: HTMLElement, code: string): Snapshot | null {
   const header = box.firstElementChild as HTMLElement | null;
   const pre = box.querySelector('pre');
@@ -413,10 +410,8 @@ function paintWindow(box: HTMLElement, code: string): Snapshot | null {
   return { canvas, dpr };
 }
 
-// One frame of the warp. Each source row gets its own start time on both axes,
-// and that stagger is the whole effect: rows nearest the target are already
-// pouring in while the far ones have not begun, so the silhouette bends into a
-// neck instead of staying a rectangle.
+// One frame of the warp. Each row gets its own start time on both axes; that
+// stagger is what bends the silhouette into a neck instead of a rectangle.
 function renderGenie(
   ctx: CanvasRenderingContext2D,
   snap: Snapshot,
@@ -429,8 +424,8 @@ function renderGenie(
   ctx.clearRect(0, 0, ctx.canvas.width / dpr, ctx.canvas.height / dpr);
 
   const out = dir === 'out';
-  // A point, not the trigger's box: our card is 488px against a 580px window,
-  // so lerping to its edges would barely squeeze at all and there'd be no neck.
+  // A point, not the trigger's box: a 488px card against a 580px window would
+  // barely squeeze, leaving no neck.
   const target = { x: to.x + to.w / 2, y: to.y + to.h / 2 };
   // Tall windows (the expanded state) cost twice the drawImage calls per frame
   const step = from.h > 600 ? 2 : 1;
@@ -498,9 +493,8 @@ function Genie({ state, onDone }: { state: GenieState; onDone: () => void }) {
     };
     raf = requestAnimationFrame(tick);
 
-    // rAF stops in a backgrounded tab, and the opening warp holds the real
-    // window hidden until it reports done — without this the window could come
-    // back to an invisible modal. Timers are throttled too but they do fire.
+    // rAF stops in a backgrounded tab while timers still fire; the opening warp
+    // keeps the real window hidden until done, so it needs this bail-out.
     const bail = setTimeout(finish, GENIE_MS + 250);
 
     return () => { cancelAnimationFrame(raf); clearTimeout(bail); };
@@ -530,9 +524,7 @@ export default function DSAdle() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
-  // True once a load has been running longer than SLOW_LOAD_MS — drives the
-  // cold-start explanation. Separate from `loading` so a fast load never
-  // flashes the message.
+  // Separate from `loading` so a fast load never flashes the cold-start message.
   const [slowLoad, setSlowLoad] = useState(false);
   const [q, setQ] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
@@ -550,17 +542,12 @@ export default function DSAdle() {
   const [calOpen, setCalOpen] = useState(false);
   // Set on mount rather than at declaration — todayIndex() is client-only
   const [calMonth, setCalMonth] = useState<{ y: number; m: number } | null>(null);
-  // Safe as a lazy initializer with no mount gate: page.tsx loads this
-  // component with ssr:false, so the first render already follows the inline
-  // theme script.
+  // The lazy initializer needs no mount gate: page.tsx loads this with ssr:false,
+  // so the first render already follows the inline theme script.
   const [theme, setTheme] = useState<Theme>(readTheme);
 
-  // Today's epoch-day index, held in state rather than recomputed during
-  // render. Deriving it inline meant any re-render after UTC midnight (7pm
-  // Central — peak play time) silently advanced dayIdx while `daily` still
-  // held the previous day's clues: guesses were scored against tomorrow's
-  // answer and saved under tomorrow's key. Promoting the rollover to a state
-  // change re-runs the load effect, which swaps the puzzle in properly.
+  // Held in state, not derived during render, so the UTC rollover is a state change
+  // that re-runs the load effect instead of desyncing dayIdx from `daily`.
   const [todayIdx, setTodayIdx] = useState(todayIndex);
 
   useEffect(() => {
@@ -621,20 +608,25 @@ export default function DSAdle() {
             setReveal(r.reveal);
           } catch (err) {
             if (cancelled) return;
-            // Only a 4xx means the saved guesses are genuinely invalid — e.g. a
-            // name that's no longer in the question bank. A 5xx or a dropped
-            // connection is transient, and wiping on those deleted real games
-            // every time the free-tier instance cycled mid-restore.
+            // Only a 4xx means the saved guesses are genuinely invalid; 5xx and
+            // dropped connections are transient, so the game survives them.
             if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+              // Expected when a saved guess names a question that has left the bank.
+              console.warn(
+                `[DSAdle] discarding saved guesses for day ${dayIdx} — server rejected them (${err.status})`,
+                err,
+              );
               setGuesses([]);
               saveGuesses([], dayIdx);
             } else {
-              setError('Could not restore your saved game — your progress is safe. Retry in a moment.');
+              logError('restore', err);
+              setError(describeError('restore', err));
             }
           }
         }
       } catch (err) {
-        if (!cancelled) setError(describeError(err));
+        logError('load', err);
+        if (!cancelled) setError(describeError('load', err));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -643,10 +635,8 @@ export default function DSAdle() {
     return () => { cancelled = true; };
   }, [offset, retryTick, todayIdx]);
 
-  // Follow the OS while the tab is open — covers the auto light/dark switch
-  // macOS and Windows perform at sunset. Deliberately does not saveTheme: a
-  // system change is not a user choice, so the page stays on "follow the OS"
-  // rather than silently locking itself to whatever the OS happened to be.
+  // Follows the OS while the tab is open. Deliberately does not saveTheme: a system
+  // change is not a user choice, so the page stays on "follow the OS".
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return;
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -718,7 +708,8 @@ export default function DSAdle() {
       setDropdownOpen(false);
       setHi(0);
     } catch (err) {
-      setError(describeError(err));
+      logError('guess', err);
+      setError(describeError('guess', err));
     } finally {
       setSubmitting(false);
     }
@@ -853,7 +844,7 @@ export default function DSAdle() {
 
   // ── Archive days ──────────────────────────────────────────────────────────
 
-  // Memoised: each entry hits localStorage twice, and this ran on every render
+  // Memoised: each entry hits localStorage twice.
   const archiveDays = useMemo(
     () => (mounted
       // 30 at most, but never further back than launch day
@@ -940,11 +931,8 @@ export default function DSAdle() {
 
   // ── Modal / traffic-light animation ───────────────────────────────────────
 
-  // Memoised: these are recreated on every render otherwise, and swapping the
-  // variants object mid-animation leaves Motion stalled part-way through.
-  //
-  // Exit is a dynamic variant so AnimatePresence's `custom` prop supplies the
-  // mode at removal time — reading it from state would give the stale value.
+  // Memoised: swapping the variants object mid-animation stalls Motion. Exit is a
+  // dynamic variant so AnimatePresence's `custom` supplies the mode at removal time.
   const backdropVariants = useMemo(() => ({
     hidden: { opacity: 0 },
     visible: { opacity: 1, transition: reduceMotion ? INSTANT : EASE_OUT },
@@ -963,9 +951,8 @@ export default function DSAdle() {
     <div style={{ minHeight: '100dvh', background: 'var(--bg)', fontFamily: FONT, color: 'var(--text)' }}>
 
       {/* ── Header ── */}
-      {/* Full-bleed app bar: the menu anchors the left edge of the viewport
-          rather than the left edge of the content column. Three columns with
-          matching side slots keep the wordmark optically centred. */}
+      {/* Full-bleed: the menu anchors the viewport edge, not the content column.
+          Matching side slots keep the wordmark optically centred. */}
       <div style={{ borderBottom: '1px solid var(--border)' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', paddingBlock: 'clamp(9px, 2.5vw, 11px)', paddingInline: GUTTER }}>
           <motion.span
@@ -1002,13 +989,9 @@ export default function DSAdle() {
           Guess the data structure or algorithm.<br />A new clue unlocks with every guess.
         </div>
 
-{/* Backend status. Two cases share one slot so they can't stack:
-            a real error (red, retryable), or a load that has run long enough
-            to need explaining. The second is the common one on a free-tier
-            backend — without it the page just looks broken for a minute.
-            No Retry while waking: the request is probably fine, and a second
-            one would not arrive any sooner. The timeout in lib/api.ts is what
-            guarantees this state ends. */}
+        {/* Error and cold-start notice share one slot so they can't stack. No Retry
+            while waking: a second request arrives no sooner, and the timeout in
+            lib/api.ts is what ends this state. */}
         {(error || (loading && slowLoad)) && (
           <div
             aria-live="polite"
@@ -1019,7 +1002,7 @@ export default function DSAdle() {
               border: `2px solid ${error ? 'var(--accent-lost)' : 'var(--border)'}`,
             }}
           >
-            {error ?? 'Waking the server up. It sleeps after 15 minutes of quiet, so the first visit of the day can take up to a minute.'}
+            {error ?? `${offset === 0 ? "Grabbing today's DSAdle" : "Grabbing that day's DSAdle"}\u2026 the server naps when nobody's playing, so this can take up to a minute.`}
             {error && (
               <motion.button
                 {...pressable}
@@ -1115,7 +1098,7 @@ export default function DSAdle() {
                 onChange={(e) => { setQ(e.target.value); setDropdownOpen(true); setHi(0); }}
                 onKeyDown={onKeyDown}
                 disabled={loading || !daily}
-                placeholder={loading ? (slowLoad ? 'Waking the server…' : 'Loading…') : 'Type a structure or algorithm'}
+                placeholder={loading ? (slowLoad ? 'Still grabbing…' : 'Loading…') : 'Type a structure or algorithm'}
                 /* 16px keeps iOS from zooming the page on focus */
                 style={{ width: '100%', minHeight: 46, padding: '13px clamp(11px, 3.5vw, 14px)', border: '2px solid var(--border-strong)', borderRadius: 3, fontSize: 16, fontFamily: FONT, background: 'var(--surface)', color: 'var(--text)' }}
               />
@@ -1143,11 +1126,8 @@ export default function DSAdle() {
             </div>
             <motion.button
               {...pressable}
-              /* Motion writes opacity inline, which outranks the
-                 `button:disabled { opacity: .35 }` rule in globals.css — so
-                 during a cold start this button looked fully enabled while
-                 being inert. Fold the disabled state into the animated value
-                 instead of fighting the cascade. */
+              /* Motion's inline opacity outranks globals.css's `button:disabled`
+                 rule, so the disabled state has to live in the animated value. */
               animate={{ opacity: submitting || loading || !daily ? 0.35 : 1 }}
               onClick={submitGuess}
               disabled={submitting || loading || !daily}
@@ -1170,9 +1150,8 @@ export default function DSAdle() {
             onClick={() => closeModal('instant')}
             style={{ position: 'fixed', inset: 0, background: 'var(--scrim-modal)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'clamp(12px, 4vw, 32px)' }}
           >
-            {/* Centring wrapper. It deliberately has no enter/exit animation of
-                its own — the scaling copy is the transition in both directions,
-                and a competing fade here stalls part-way when that state churns. */}
+            {/* No enter/exit animation of its own: the warping copy is the
+                transition in both directions, and a competing fade here stalls. */}
             <div
               onClick={(e) => e.stopPropagation()}
               style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
@@ -1241,7 +1220,7 @@ export default function DSAdle() {
                 <motion.button {...pressable} onClick={() => setSideOpen(false)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--text-muted)', padding: 0, lineHeight: '1' }}>×</motion.button>
               </div>
 
-              {/* Panes — main slides left as archive slides in from the right */}
+              {/* Panes */}
               <AnimatePresence mode="wait" initial={false}>
                 {sideView === 'main' ? (
                   <motion.div
@@ -1270,9 +1249,8 @@ export default function DSAdle() {
                     transition={reduceMotion ? INSTANT : { duration: 0.2, ease: 'easeOut' }}
                     style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}
                   >
-                    {/* Two separate controls in one bar: back on the left,
-                        calendar toggle on the right. Splitting them keeps the
-                        icon's click from bubbling into the back navigation. */}
+                    {/* Two controls, not one: keeps the calendar icon's click from
+                        bubbling into the back navigation. */}
                     <div style={{ flexShrink: 0, borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'stretch' }}>
                       <motion.div
                         {...pressableRow}
@@ -1375,8 +1353,7 @@ export default function DSAdle() {
                 )}
               </AnimatePresence>
 
-              {/* Pinned footer — sits outside the pane swap, so it stays put
-                  in both the main and archive views */}
+              {/* Outside the pane swap, so it stays put in both views */}
               <div style={{
                 flexShrink: 0, borderTop: '1px solid var(--border)', padding: `14px ${SIDE_PAD}`,
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
