@@ -25,15 +25,15 @@ const ATTEMPTED: Record<ErrorContext, string> = {
   restore: "Couldn't pick your game back up",
 };
 
-// Deliberately vague about the stack: the player can't act on "502 from the
-// origin", and the console carries it for whoever can.
+// Named in terms of DSAdle, not the stack behind it: the player can't act on
+// "502 from the origin", and the console carries that for whoever can.
 function reasonFor(err: unknown): string {
-  if (err instanceof TimeoutError) return 'The server is taking a while to wake up.';
-  if (err instanceof NetworkError) return "Can't reach the server right now.";
+  if (err instanceof TimeoutError) return 'DSAdle is still waking up.';
+  if (err instanceof NetworkError) return "Can't reach DSAdle right now.";
   if (err instanceof ApiError) {
     if (err.status === 404) return "There's no DSAdle scheduled for that day.";
-    if (err.status >= 500) return 'The server ran into a problem.';
-    return 'The server turned down the request.';
+    if (err.status >= 500) return 'Something went wrong on our end.';
+    return "That didn't go through.";
   }
   return 'Something unexpected happened.';
 }
@@ -1002,7 +1002,7 @@ export default function DSAdle() {
               border: `2px solid ${error ? 'var(--accent-lost)' : 'var(--border)'}`,
             }}
           >
-            {error ?? `${offset === 0 ? "Grabbing today's DSAdle" : "Grabbing that day's DSAdle"}\u2026 the server naps when nobody's playing, so this can take up to a minute.`}
+            {error ?? `${offset === 0 ? "Grabbing today's DSAdle" : "Grabbing that day's DSAdle"}\u2026 it naps when nobody's playing, so this can take up to a minute.`}
             {error && (
               <motion.button
                 {...pressable}
