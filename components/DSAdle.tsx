@@ -7,11 +7,17 @@ import { fetchNames, fetchDaily, submitGuesses, ApiError, DailyClues, Reveal } f
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
 const MAX_GUESSES = 5;
 
-// Day one. Everything before it is unplayable — the backend picks its answer
-// with `day_idx % n`, so without a floor every date back to 1970 returns a real
-// puzzle. Mirrored by LAUNCH_DAY_IDX in backend/routers/game.py; change both.
-// Month is 0-based: 5 is June.
-const LAUNCH_DAY = Math.floor(Date.UTC(2026, 5, 21) / 86400000); // 2026-06-21
+// Day one: the floor for the archive, the calendar, and Prev navigation.
+//
+// Must match the EARLIEST puzzle_date in backend/seed_data.json. The backend no
+// longer derives an answer arithmetically (the old `day_idx % n`, which made
+// every date back to 1970 return a real puzzle) — it looks up the row whose
+// puzzle_date matches, and 404s when there isn't one. So a LAUNCH_DAY earlier
+// than the first scheduled puzzle doesn't break the API, it just offers the
+// player a pile of archive days that all error.
+//
+// Month is 0-based: 7 is August.
+const LAUNCH_DAY = Math.floor(Date.UTC(2026, 7, 17) / 86400000); // 2026-08-17
 
 // ─── Layout ────────────────────────────────────────────────────────────────
 
