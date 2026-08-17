@@ -2,9 +2,35 @@
 
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, KeyboardEvent, CSSProperties } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { fetchNames, fetchDaily, submitGuesses, ApiError, DailyClues, Reveal } from '@/lib/api';
+import {
+  fetchNames, fetchDaily, submitGuesses,
+  ApiError, TimeoutError, NetworkError,
+  DailyClues, Reveal,
+} from '@/lib/api';
 
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
+
+// How long a load may run before we explain the wait. Short enough that nobody
+// stares at a dead-looking page, long enough that a warm backend (~200ms) never
+// triggers it.
+const SLOW_LOAD_MS = 3000;
+
+// Every failure used to surface as "Is the backend running?" — a question for
+// the developer, not for a stranger on the internet, and identical whether the
+// server was asleep, the day had no puzzle, or the network was down.
+function describeError(err: unknown): string {
+  if (err instanceof TimeoutError) {
+    return 'The server took too long to respond. It may still be waking up — try again in a moment.';
+  }
+  if (err instanceof NetworkError) {
+    return "Couldn't reach the server. Check your connection, then try again.";
+  }
+  if (err instanceof ApiError) {
+    if (err.status === 404) return 'No puzzle is scheduled for this day.';
+    if (err.status >= 500) return 'The server ran into a problem. Try again in a moment.';
+  }
+  return "Something went wrong loading today's puzzle.";
+}
 const MAX_GUESSES = 5;
 
 // Day one: the floor for the archive, the calendar, and Prev navigation.
@@ -504,6 +530,10 @@ export default function DSAdle() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  // True once a load has been running longer than SLOW_LOAD_MS — drives the
+  // cold-start explanation. Separate from `loading` so a fast load never
+  // flashes the message.
+  const [slowLoad, setSlowLoad] = useState(false);
   const [q, setQ] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [modalExpanded, setModalExpanded] = useState(false);
@@ -542,6 +572,15 @@ export default function DSAdle() {
     }, 30_000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (!loading) {
+      setSlowLoad(false);
+      return;
+    }
+    const id = setTimeout(() => setSlowLoad(true), SLOW_LOAD_MS);
+    return () => clearTimeout(id);
+  }, [loading]);
 
   const reduceMotion = useReducedMotion();
 
@@ -594,8 +633,8 @@ export default function DSAdle() {
             }
           }
         }
-      } catch {
-        if (!cancelled) setError('Could not reach the DSAdle server. Is the backend running?');
+      } catch (err) {
+        if (!cancelled) setError(describeError(err));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -678,8 +717,8 @@ export default function DSAdle() {
       setQ('');
       setDropdownOpen(false);
       setHi(0);
-    } catch {
-      setError('Guess failed — check that the backend is running, then try again.');
+    } catch (err) {
+      setError(describeError(err));
     } finally {
       setSubmitting(false);
     }
@@ -963,15 +1002,31 @@ export default function DSAdle() {
           Guess the data structure or algorithm.<br />A new clue unlocks with every guess.
         </div>
 
-        {/* Backend error */}
-        {error && (
-          <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--accent-lost)', border: '2px solid var(--accent-lost)', borderRadius: 3, padding: '12px clamp(12px, 4vw, 16px)', marginBottom: SECTION_GAP, lineHeight: 1.4 }}>
-            {error}
-            <motion.button
-              {...pressable}
-              onClick={() => setRetryTick((t) => t + 1)}
-              style={{ display: 'block', margin: '10px auto 0', fontSize: 12, fontWeight: 700, color: 'var(--on-accent)', background: 'var(--accent-lost)', border: 'none', borderRadius: 3, padding: '7px 14px', cursor: 'pointer' }}
-            >Retry</motion.button>
+{/* Backend status. Two cases share one slot so they can't stack:
+            a real error (red, retryable), or a load that has run long enough
+            to need explaining. The second is the common one on a free-tier
+            backend — without it the page just looks broken for a minute.
+            No Retry while waking: the request is probably fine, and a second
+            one would not arrive any sooner. The timeout in lib/api.ts is what
+            guarantees this state ends. */}
+        {(error || (loading && slowLoad)) && (
+          <div
+            aria-live="polite"
+            style={{
+              textAlign: 'center', fontSize: 13, lineHeight: 1.4, borderRadius: 3,
+              padding: '12px clamp(12px, 4vw, 16px)', marginBottom: SECTION_GAP,
+              color: error ? 'var(--accent-lost)' : 'var(--text-muted)',
+              border: `2px solid ${error ? 'var(--accent-lost)' : 'var(--border)'}`,
+            }}
+          >
+            {error ?? 'Waking the server up. It sleeps after 15 minutes of quiet, so the first visit of the day can take up to a minute.'}
+            {error && (
+              <motion.button
+                {...pressable}
+                onClick={() => setRetryTick((t) => t + 1)}
+                style={{ display: 'block', margin: '10px auto 0', fontSize: 12, fontWeight: 700, color: 'var(--on-accent)', background: 'var(--accent-lost)', border: 'none', borderRadius: 3, padding: '7px 14px', cursor: 'pointer' }}
+              >Retry</motion.button>
+            )}
           </div>
         )}
 
@@ -1060,7 +1115,7 @@ export default function DSAdle() {
                 onChange={(e) => { setQ(e.target.value); setDropdownOpen(true); setHi(0); }}
                 onKeyDown={onKeyDown}
                 disabled={loading || !daily}
-                placeholder={loading ? 'Loading…' : 'Type a structure or algorithm'}
+                placeholder={loading ? (slowLoad ? 'Waking the server…' : 'Loading…') : 'Type a structure or algorithm'}
                 /* 16px keeps iOS from zooming the page on focus */
                 style={{ width: '100%', minHeight: 46, padding: '13px clamp(11px, 3.5vw, 14px)', border: '2px solid var(--border-strong)', borderRadius: 3, fontSize: 16, fontFamily: FONT, background: 'var(--surface)', color: 'var(--text)' }}
               />
@@ -1088,7 +1143,12 @@ export default function DSAdle() {
             </div>
             <motion.button
               {...pressable}
-              animate={{ opacity: submitting ? 0.6 : 1 }}
+              /* Motion writes opacity inline, which outranks the
+                 `button:disabled { opacity: .35 }` rule in globals.css — so
+                 during a cold start this button looked fully enabled while
+                 being inert. Fold the disabled state into the animated value
+                 instead of fighting the cascade. */
+              animate={{ opacity: submitting || loading || !daily ? 0.35 : 1 }}
               onClick={submitGuess}
               disabled={submitting || loading || !daily}
               style={{ flexShrink: 0, minHeight: 46, padding: '0 clamp(14px, 5vw, 22px)', background: 'var(--btn-bg)', color: 'var(--btn-fg)', border: 'none', borderRadius: 3, fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer' }}

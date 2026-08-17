@@ -49,8 +49,41 @@ export class ApiError extends Error {
   }
 }
 
+// Render's free tier spins the service down after 15 minutes idle, and the
+// next request waits ~50-60s while the instance boots. So this is deliberately
+// generous: it is not here to fail fast, it is here to bound the browser's
+// ~300s default so a genuinely dead request eventually surfaces as an error
+// with a retry button instead of a spinner that never resolves.
+const TIMEOUT_MS = 90_000;
+
+/** The request exceeded TIMEOUT_MS. */
+export class TimeoutError extends Error {
+  constructor() {
+    super(`Request timed out after ${TIMEOUT_MS}ms`);
+    this.name = 'TimeoutError';
+  }
+}
+
+/** fetch() itself rejected — offline, DNS failure, or a CORS block. */
+export class NetworkError extends Error {
+  constructor(cause: unknown) {
+    super('Network request failed');
+    this.name = 'NetworkError';
+    this.cause = cause;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, init);
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
+  } catch (err) {
+    // AbortSignal.timeout rejects with a DOMException named 'TimeoutError';
+    // everything else reaching here is a transport failure. Distinguishing the
+    // two is what lets the UI say something true rather than one catch-all.
+    if (err instanceof DOMException && err.name === 'TimeoutError') throw new TimeoutError();
+    throw new NetworkError(err);
+  }
   if (!res.ok) {
     throw new ApiError(res.status, await res.text());
   }
