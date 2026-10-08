@@ -75,12 +75,14 @@ def day_range(db: Session = Depends(get_db)):
         .where(models.Question.puzzle_date.is_not(None))
         .order_by(models.Question.puzzle_date)
     )
-    day_idxs = [idx for idx in (_idx_for_date(d) for d in scheduled) if idx <= today]
+    all_idxs = [_idx_for_date(d) for d in scheduled]
+    day_idxs = [idx for idx in all_idxs if idx <= today]
     return schemas.DayRangeOut(
         first_day_idx=day_idxs[0] if day_idxs else None,
         last_day_idx=day_idxs[-1] if day_idxs else None,
         today_day_idx=today,
         day_idxs=day_idxs,
+        has_next=(today + 1) in all_idxs,
     )
 
 

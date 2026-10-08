@@ -29,6 +29,7 @@
   --accent-won:    #538d4e;
   --accent-lost:   #c14b3e;
   --on-accent:     #ffffff;
+  --bar:           #6f7375;   /* neutral distribution bars, white numbers on top */
 
   /* Filled buttons. Separate from --text/--bg because this pair inverts
      between themes and the ink pair does not. */
@@ -65,6 +66,7 @@
   --accent-won:    #5b9c55;
   --accent-lost:   #cb5648;
   --on-accent:     #ffffff;
+  --bar:           #4a4c51;
 
   --btn-bg:        #e9e9ea;
   --btn-fg:        #121213;
@@ -79,6 +81,15 @@
 
 *, *::before, *::after {
   box-sizing: border-box;
+}
+
+/* No visible page scrollbar anywhere: it sat beside the centred popups and
+   threw them off balance. The page still scrolls by wheel, trackpad and touch. */
+html {
+  scrollbar-width: none;
+}
+html::-webkit-scrollbar {
+  display: none;
 }
 
 body {
@@ -117,3 +128,8 @@ button:disabled {
   opacity: 0.35;
   cursor: default;
 }
+
+/* Scrollable without a visible bar, for centred panels where a bar down one
+   side would throw off the symmetry. Wheel, trackpad and touch still scroll. */
+.dsadle-no-scrollbar { scrollbar-width: none; }
+.dsadle-no-scrollbar::-webkit-scrollbar { display: none; }

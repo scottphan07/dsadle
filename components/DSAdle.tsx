@@ -3,9 +3,9 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, KeyboardEvent, CSSProperties } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
-  fetchNames, fetchDaily, submitGuesses,
+  fetchNames, fetchDaily, fetchRange, submitGuesses,
   ApiError, TimeoutError, NetworkError,
-  DailyClues, Reveal,
+  DailyClues, DayRange, Reveal,
 } from '@/lib/api';
 
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
@@ -112,9 +112,12 @@ const SPRING = { type: 'spring', stiffness: 300, damping: 28 } as const;
 const EASE_OUT = { duration: 0.28, ease: [0.22, 1, 0.36, 1] } as const;
 const INSTANT = { duration: 0 } as const;
 // Warp duration: long enough that the staggered rows read as a curve, not a blur.
-const GENIE_MS = 200;
+const GENIE_MS = 320;
 // Duration-based spring: `duration`/`bounce` replace stiffness/damping, never mix the two
 const FLIP = { type: 'spring', duration: 0.8, bounce: 0.18 } as const;
+// After the final guess, the results popup waits for the last clues to finish
+// flipping open, the way Wordle waits for its tiles.
+const END_DELAY_MS = 1100;
 
 const pressable = {
   whileHover: { scale: 1.03 },
@@ -202,6 +205,76 @@ function saveResult(dayIdx: number, result: 'won' | 'lost'): void {
   try {
     localStorage.setItem('dsadle-result-' + dayIdx, result);
   } catch {}
+}
+
+// Marks a game finished on its own day. Only these count toward streaks, so the
+// archive can't be used to backfill one. Games finished before this key existed
+// carry no mark, so streaks effectively start counting from this release.
+function markOnTime(dayIdx: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem('dsadle-ontime-' + dayIdx, '1');
+  } catch {}
+}
+
+function readOnTime(dayIdx: number): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem('dsadle-ontime-' + dayIdx) === '1';
+  } catch {
+    return false;
+  }
+}
+
+type Stats = {
+  played: number;
+  winPct: number;
+  current: number;
+  max: number;
+  /** Wins by guess count, index 0 = solved on the first guess. */
+  dist: number[];
+  losses: number;
+};
+
+// Everything comes from what the game already saves per day, so there's no
+// separate stats record to drift out of sync. `days` must be ascending.
+function computeStats(days: number[], today: number): Stats {
+  let played = 0, wins = 0, losses = 0, run = 0, max = 0;
+  const dist = new Array(MAX_GUESSES).fill(0);
+  for (const d of days) {
+    const res = readResult(d);
+    if (res) {
+      played++;
+      if (res === 'won') {
+        wins++;
+        const n = readGuesses(keyForDay(d)).length;
+        dist[Math.min(MAX_GUESSES, Math.max(1, n)) - 1]++;
+      } else {
+        losses++;
+      }
+    }
+    // Streaks: archive and lost games break them; today in progress doesn't.
+    if (res === 'won' && readOnTime(d)) {
+      run++;
+      max = Math.max(max, run);
+    } else if (!(d === today && res === null)) {
+      run = 0;
+    }
+  }
+  return {
+    played,
+    winPct: played ? Math.round((wins / played) * 100) : 0,
+    current: run,
+    max,
+    dist,
+    losses,
+  };
+}
+
+function formatCountdown(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const pad = (x: number) => String(x).padStart(2, '0');
+  return `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`;
 }
 
 // ─── Theme ─────────────────────────────────────────────────────────────────
@@ -553,6 +626,14 @@ export default function DSAdle() {
   // The lazy initializer needs no mount gate: page.tsx loads this with ssr:false,
   // so the first render already follows the inline theme script.
   const [theme, setTheme] = useState<Theme>(readTheme);
+  // Results popup. Opens after a final guess, and straight away when loading a
+  // day that's already finished.
+  const [endOpen, setEndOpen] = useState(false);
+  const endTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Scheduled days and whether tomorrow has one. Null until fetched or if the
+  // fetch fails; the popup falls back to sensible defaults either way.
+  const [range, setRange] = useState<DayRange | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   // Held in state, not derived during render, so the UTC rollover is a state change
   // that re-runs the load effect instead of desyncing dayIdx from `daily`.
@@ -598,6 +679,8 @@ export default function DSAdle() {
       setLoading(true);
       setError(null);
       setNoPuzzle(false);
+      if (endTimer.current) clearTimeout(endTimer.current);
+      setEndOpen(false);
       setDaily(null);
       setResults([]);
       setReveal(null);
@@ -615,6 +698,9 @@ export default function DSAdle() {
             if (cancelled) return;
             setResults(r.results);
             setReveal(r.reveal);
+            // A finished day shows its results straight away: no delay, since
+            // nothing is flipping open on a restored board.
+            if (r.game_over) setEndOpen(true);
           } catch (err) {
             if (cancelled) return;
             // Only a 4xx means the saved guesses are genuinely invalid; 5xx and
@@ -649,6 +735,27 @@ export default function DSAdle() {
     load();
     return () => { cancelled = true; };
   }, [offset, retryTick, todayIdx]);
+
+  // The schedule only changes at rollover, so this needn't follow `offset`.
+  useEffect(() => {
+    let cancelled = false;
+    fetchRange()
+      .then((r) => { if (!cancelled) setRange(r); })
+      .catch((err) => console.warn('[DSAdle] could not fetch the schedule', err));
+    return () => { cancelled = true; };
+  }, [todayIdx, retryTick]);
+
+  // Ticks the "Next DSAdle" countdown, only while someone can see it.
+  useEffect(() => {
+    if (!endOpen || offset !== 0) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [endOpen, offset]);
+
+  useEffect(() => () => {
+    if (endTimer.current) clearTimeout(endTimer.current);
+  }, []);
 
   // Follows the OS while the tab is open. Deliberately does not saveTheme: a system
   // change is not a user choice, so the page stays on "follow the OS".
@@ -727,7 +834,13 @@ export default function DSAdle() {
       setResults(r.results);
       setReveal(r.reveal);
       saveGuesses(next, dayIdx);
-      if (r.game_over) saveResult(dayIdx, r.won ? 'won' : 'lost');
+      if (r.game_over) {
+        saveResult(dayIdx, r.won ? 'won' : 'lost');
+        // The live clock, not `todayIdx`, which can lag rollover by up to 30s.
+        if (dayIdx === todayIndex()) markOnTime(dayIdx);
+        if (endTimer.current) clearTimeout(endTimer.current);
+        endTimer.current = setTimeout(() => setEndOpen(true), reduceMotion ? 0 : END_DELAY_MS);
+      }
       setError(null);
       setQ('');
       setDropdownOpen(false);
@@ -892,6 +1005,47 @@ export default function DSAdle() {
     [mounted, guesses, todayIdx],
   );
 
+  // ── Results popup ─────────────────────────────────────────────────────────
+
+  // Every scheduled day up to today. Until the range loads (or if it fails),
+  // fall back to every day since launch, which only differs on gap days.
+  const scheduledDays = useMemo(
+    () => (range && range.day_idxs.length > 0
+      ? range.day_idxs
+      : Array.from({ length: Math.max(0, todayIdx - LAUNCH_DAY + 1) }, (_, i) => LAUNCH_DAY + i)),
+    [range, todayIdx],
+  );
+
+  // Computed only while the popup is open: it walks localStorage for every day.
+  const endInfo = useMemo(() => {
+    if (!endOpen) return null;
+    const stats = computeStats(scheduledDays, todayIdx);
+    // Forward from this day first, then back, so working through the archive
+    // in either direction keeps moving the same way.
+    const later = scheduledDays.filter((d) => d > dayIdx && dayStatus(d) === null);
+    const earlier = scheduledDays.filter((d) => d < dayIdx && dayStatus(d) === null);
+    const nextUnplayed = later.length ? later[0] : earlier.length ? earlier[earlier.length - 1] : null;
+    return { stats, nextUnplayed };
+    // `guesses` is a localStorage cache key, not a value read above — see archiveDays
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endOpen, scheduledDays, todayIdx, dayIdx, guesses]);
+
+  const solvedIn = won ? results.findIndex(Boolean) + 1 : 0;
+  const endTiles = Array.from({ length: MAX_GUESSES }, (_, i) =>
+    i >= guesses.length ? 'empty' : results[i] ? 'right' : 'wrong');
+  const distRows = endInfo
+    ? [...endInfo.stats.dist.map((count, i) => ({ label: String(i + 1), count, hit: won && solvedIn === i + 1 })),
+       { label: '✕', count: endInfo.stats.losses, hit: !won }]
+    : [];
+  const distMax = Math.max(1, ...distRows.map((r) => r.count));
+  // Optimistic until the range says otherwise, so a failed fetch never claims
+  // the game has run out.
+  const hasNext = range ? range.has_next : true;
+
+  function closeEnd() {
+    setEndOpen(false);
+  }
+
   // ── Calendar ──────────────────────────────────────────────────────────────
 
   // All arithmetic is UTC — day indices are UTC epoch-days, and mixing in local
@@ -993,7 +1147,22 @@ export default function DSAdle() {
                otherwise push the glyphs left of true centre */
             style={{ fontSize: 'clamp(22px, 6vw, 30px)', fontWeight: 800, letterSpacing: '.16em', marginRight: '-.16em', textTransform: 'uppercase', color: 'var(--text)', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >DSAdle</div>
-          <span style={{ justifySelf: 'end', width: HEADER_SLOT, height: HEADER_SLOT }} />
+          {isOver && reveal ? (
+            <motion.button
+              {...pressable}
+              onClick={() => setEndOpen(true)}
+              title="Results"
+              aria-label="Show results"
+              style={{ justifySelf: 'end', marginRight: -9, width: HEADER_SLOT, height: HEADER_SLOT, border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              {/* Bar chart: same 16-unit grid, stroke and round caps as the calendar */}
+              <svg viewBox="0 0 16 16" width={18} height={18} style={{ display: 'block' }}>
+                <path d="M3 13.5 L3 9 M8 13.5 L8 3 M13 13.5 L13 6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+              </svg>
+            </motion.button>
+          ) : (
+            <span style={{ justifySelf: 'end', width: HEADER_SLOT, height: HEADER_SLOT }} />
+          )}
         </div>
       </div>
 
@@ -1124,9 +1293,22 @@ export default function DSAdle() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={reduceMotion ? INSTANT : EASE_OUT}
-            style={{ textAlign: 'center', padding: '20px clamp(12px, 4vw, 16px)', border: '2px solid var(--border)', borderRadius: 3, marginBottom: SECTION_GAP }}
+            style={{ position: 'relative', textAlign: 'center', padding: '20px clamp(12px, 4vw, 16px)', border: '2px solid var(--border)', borderRadius: 3, marginBottom: SECTION_GAP }}
           >
-            <div style={{ fontSize: 'clamp(20px, 5.5vw, 24px)', fontWeight: 800, color: 'var(--text)' }}>{reveal.name}</div>
+            {/* Second way back into the results popup, beside the header icon */}
+            <motion.button
+              {...pressable}
+              onClick={() => setEndOpen(true)}
+              title="Results"
+              aria-label="Show results"
+              style={{ position: 'absolute', top: 2, right: 2, width: 40, height: 40, border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              <svg viewBox="0 0 16 16" width={16} height={16} style={{ display: 'block' }}>
+                <path d="M3 13.5 L3 9 M8 13.5 L8 3 M13 13.5 L13 6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+              </svg>
+            </motion.button>
+            {/* Side padding clears the icon so a long name can't run under it */}
+            <div style={{ fontSize: 'clamp(20px, 5.5vw, 24px)', fontWeight: 800, color: 'var(--text)', paddingInline: 32 }}>{reveal.name}</div>
             <div style={{ fontSize: 13, color: 'var(--text-soft)', marginTop: 8, lineHeight: 1.5 }}>{reveal.description}</div>
             <motion.button
               {...pressable}
@@ -1185,6 +1367,158 @@ export default function DSAdle() {
           </div>
         )}
       </div>
+
+      {/* ── Results popup ── */}
+      {/* z-index 45: over the sidebar (40), under the code window (50). */}
+      <AnimatePresence>
+        {endOpen && isOver && reveal && endInfo && (
+          <motion.div
+            key="results"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={reduceMotion ? INSTANT : EASE_OUT}
+            onClick={closeEnd}
+            style={{ position: 'fixed', inset: 0, background: 'var(--scrim-modal)', zIndex: 45, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'clamp(12px, 4vw, 32px)' }}
+          >
+            <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="dsadle-results-title"
+              initial={{ opacity: 0, y: 24, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={reduceMotion ? INSTANT : SPRING}
+              onClick={(e) => e.stopPropagation()}
+              // Scrolls without a visible bar: a bar down one side knocks the
+              // centred layout off balance. Spacing below is kept tight so most
+              // screens don't need to scroll at all.
+              className="dsadle-no-scrollbar"
+              style={{ position: 'relative', width: 'min(400px, 100%)', maxHeight: '92dvh', overflowY: 'auto', overscrollBehavior: 'contain', boxSizing: 'border-box', background: 'var(--surface)', color: 'var(--text)', borderRadius: 10, boxShadow: '0 24px 70px rgba(0,0,0,.35)', padding: '18px clamp(16px, 5vw, 24px) 18px' }}
+            >
+              <motion.button
+                {...pressable}
+                onClick={closeEnd}
+                aria-label="Close"
+                style={{ position: 'absolute', top: 6, right: 6, width: 44, height: 44, border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <svg viewBox="0 0 16 16" width={16} height={16} style={{ display: 'block' }}>
+                  <path d="M3.5 3.5 L12.5 12.5 M12.5 3.5 L3.5 12.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" fill="none" />
+                </svg>
+              </motion.button>
+
+              {/* Headline and guess squares */}
+              <div style={{ textAlign: 'center', paddingTop: 6 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                  {dateLabel}{offset !== 0 ? ' · Archive' : ''}
+                </div>
+                <div id="dsadle-results-title" style={{ fontSize: 30, fontWeight: 800, marginTop: 6, color: won ? 'var(--accent-won)' : 'var(--accent-lost)' }}>
+                  {won ? `Guessed in ${solvedIn}` : 'Out of guesses'}
+                </div>
+                <div aria-hidden="true" style={{ display: 'flex', justifyContent: 'center', gap: 6, marginTop: 12 }}>
+                  {endTiles.map((t, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        width: 24, height: 24, borderRadius: 3, boxSizing: 'border-box',
+                        background: t === 'right' ? 'var(--accent-won)' : t === 'wrong' ? 'var(--accent-lost)' : 'transparent',
+                        border: `2px solid ${t === 'right' ? 'var(--accent-won)' : t === 'wrong' ? 'var(--accent-lost)' : 'var(--border)'}`,
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* The answer */}
+              <div style={{ marginTop: 14, border: '2px solid var(--border)', borderRadius: 3, padding: '14px 16px 16px', textAlign: 'center' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                  {won ? 'The answer' : 'The answer was'}
+                </div>
+                <div style={{ fontSize: 23, fontWeight: 800, marginTop: 6 }}>{reveal.name}</div>
+                <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--text-soft)', marginTop: 8 }}>{reveal.description}</div>
+                <motion.button
+                  {...pressable}
+                  // Hands off to the code window, which warps from the inline
+                  // "View implementation" button left on the page behind this.
+                  onClick={() => { closeEnd(); openModal('over'); }}
+                  style={{ marginTop: 14, minHeight: 40, fontSize: 13, fontWeight: 700, fontFamily: FONT, color: 'var(--btn-fg)', background: 'var(--btn-bg)', border: 'none', borderRadius: 3, padding: '0 16px', cursor: 'pointer' }}
+                >⟨ ⟩ View implementation</motion.button>
+              </div>
+
+              {/* Statistics */}
+              <div style={{ marginTop: 16, fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', textAlign: 'center' }}>Statistics</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 4, marginTop: 8, textAlign: 'center' }}>
+                {[
+                  { value: endInfo.stats.played, label: 'Played' },
+                  { value: endInfo.stats.winPct, label: 'Win %' },
+                  { value: endInfo.stats.current, label: 'Current streak' },
+                  { value: endInfo.stats.max, label: 'Max streak' },
+                ].map((s) => (
+                  <div key={s.label}>
+                    <div style={{ fontSize: 30, fontWeight: 400, lineHeight: 1.1, fontVariantNumeric: 'tabular-nums' }}>{s.value}</div>
+                    <div style={{ fontSize: 11, lineHeight: 1.25, color: 'var(--text-muted)', marginTop: 2 }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Guess distribution */}
+              <div style={{ marginTop: 16, fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', textAlign: 'center' }}>Guess distribution</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+                {distRows.map((r) => (
+                  <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ width: 12, fontSize: 13, fontWeight: 700, textAlign: 'right' }}>{r.label}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        width: `${(r.count / distMax) * 100}%`, minWidth: 26, boxSizing: 'border-box',
+                        background: r.hit ? (won ? 'var(--accent-won)' : 'var(--accent-lost)') : 'var(--bar)',
+                        color: 'var(--on-accent)', fontSize: 12, fontWeight: 700, textAlign: 'right',
+                        padding: '3px 8px', borderRadius: 2,
+                      }}>{r.count}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ height: 1, background: 'var(--border)', margin: '16px 0 14px' }} />
+
+              {/* Footer: what to do next */}
+              {offset !== 0 ? (
+                endInfo.nextUnplayed !== null ? (
+                  <motion.button
+                    {...pressableRow}
+                    onClick={() => goToDay(endInfo.nextUnplayed as number)}
+                    style={{ width: '100%', minHeight: 48, fontSize: 14, fontWeight: 700, fontFamily: FONT, color: 'var(--btn-fg)', background: 'var(--btn-bg)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+                  >Next unplayed day ›</motion.button>
+                ) : (
+                  <motion.button
+                    {...pressableRow}
+                    onClick={goHome}
+                    style={{ width: '100%', minHeight: 48, fontSize: 14, fontWeight: 700, fontFamily: FONT, color: 'var(--btn-fg)', background: 'var(--btn-bg)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+                  >Back to today</motion.button>
+                )
+              ) : hasNext ? (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Next DSAdle</div>
+                  <div style={{ fontSize: 28, fontWeight: 400, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+                    {formatCountdown((todayIdx + 1) * 86400000 - now)}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Next DSAdle</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, marginTop: 4 }}>Not scheduled yet</div>
+                  <div style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--text-muted)', marginTop: 4 }}>New puzzles are on the way. Catch up on past days while you wait.</div>
+                  <motion.button
+                    {...pressableRow}
+                    onClick={() => { closeEnd(); setSideOpen(true); setSideView('archive'); }}
+                    style={{ width: '100%', minHeight: 48, marginTop: 12, fontSize: 14, fontWeight: 700, fontFamily: FONT, color: 'var(--btn-fg)', background: 'var(--btn-bg)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+                  >Play the archive</motion.button>
+                </div>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── Code modal ── */}
       <AnimatePresence custom={exitMode}>

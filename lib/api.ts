@@ -25,6 +25,8 @@ export interface DayRange {
   last_day_idx: number | null;
   today_day_idx: number;
   day_idxs: number[];
+  /** Whether tomorrow has a puzzle — false means the schedule ends today. */
+  has_next: boolean;
 }
 
 export interface GuessResponse {

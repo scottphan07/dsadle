@@ -78,6 +78,9 @@ class DayRangeOut(BaseModel):
     last_day_idx: Optional[int]
     today_day_idx: int  # server-side today, so the UI needn't trust the browser clock
     day_idxs: list[int]
+    # Whether tomorrow has a puzzle. A bare boolean, so it can't leak which
+    # question is coming; lets the results popup skip a countdown to nothing.
+    has_next: bool = False
 
 
 class GuessRequest(BaseModel):
