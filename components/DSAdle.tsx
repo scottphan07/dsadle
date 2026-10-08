@@ -56,6 +56,10 @@ function logError(context: ErrorContext, err: unknown): void {
 }
 const MAX_GUESSES = 5;
 
+// Suggestion list height: ~6 rows on desktop, then it scrolls. The dvh cap keeps
+// it clear of the header on short phone screens with the keyboard up.
+const SUGGEST_MAX_H = 'min(276px, 38dvh)';
+
 // Day one: the floor for the archive, the calendar and Prev navigation. Must match
 // the earliest puzzle_date in backend/seed_data.json — earlier days 404. Month is 0-based.
 const LAUNCH_DAY = Math.floor(Date.UTC(2026, 7, 17) / 86400000); // 2026-08-17
@@ -523,6 +527,10 @@ export default function DSAdle() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A 404 on load isn't a failure: the day simply has no puzzle (the schedule
+  // ran out, or it's a gap day). Kept apart from `error` so it gets a calm
+  // notice pointing at the archive instead of a red box with Retry.
+  const [noPuzzle, setNoPuzzle] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
   // Separate from `loading` so a fast load never flashes the cold-start message.
   const [slowLoad, setSlowLoad] = useState(false);
@@ -589,6 +597,7 @@ export default function DSAdle() {
     async function load() {
       setLoading(true);
       setError(null);
+      setNoPuzzle(false);
       setDaily(null);
       setResults([]);
       setReveal(null);
@@ -625,8 +634,14 @@ export default function DSAdle() {
           }
         }
       } catch (err) {
-        logError('load', err);
-        if (!cancelled) setError(describeError('load', err));
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 404) {
+          console.info(`[DSAdle] no puzzle scheduled for day ${dayIdx}`);
+          setNoPuzzle(true);
+        } else {
+          logError('load', err);
+          setError(describeError('load', err));
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -677,9 +692,11 @@ export default function DSAdle() {
     const trimmed = q.trim().toLowerCase();
     if (!trimmed) return [];
     const used = new Set(guesses);
+    // Every match, not a top few: the list scrolls (see SUGGEST_MAX_H), so a
+    // short query like "tree" can still reach all 15+ trees.
     return names.filter(
       (n) => !used.has(n) && n.toLowerCase().includes(trimmed)
-    ).slice(0, 6);
+    );
   }
 
   const suggList = getSuggestions();
@@ -688,6 +705,14 @@ export default function DSAdle() {
     name,
     bg: i === hiClamped ? 'var(--surface-hi)' : 'var(--surface)',
   }));
+
+  // Arrow keys can move the highlight past the visible rows, so follow it.
+  // 'nearest' scrolls only when the row is actually out of view.
+  const suggestRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const row = suggestRef.current?.children[hiClamped] as HTMLElement | undefined;
+    row?.scrollIntoView({ block: 'nearest' });
+  }, [hiClamped]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
@@ -1013,6 +1038,29 @@ export default function DSAdle() {
           </div>
         )}
 
+        {/* No puzzle for this day: neutral, not an error, and no Retry since
+            asking again won't schedule one. Points at the archive instead. */}
+        {noPuzzle && !error && (
+          <div
+            aria-live="polite"
+            style={{
+              textAlign: 'center', fontSize: 13, lineHeight: 1.4, borderRadius: 3,
+              padding: '14px clamp(12px, 4vw, 16px)', marginBottom: SECTION_GAP,
+              color: 'var(--text-muted)', border: '2px solid var(--border)',
+            }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>
+              {offset === 0 ? "There's no DSAdle today" : "There's no DSAdle for this day"}
+            </div>
+            New puzzles are on the way. In the meantime, catch up on past days in the archive.
+            <motion.button
+              {...pressable}
+              onClick={() => { setSideOpen(true); setSideView('archive'); }}
+              style={{ display: 'block', margin: '12px auto 0', fontSize: 13, fontWeight: 700, color: 'var(--btn-fg)', background: 'var(--btn-bg)', border: 'none', borderRadius: 3, padding: '9px 16px', cursor: 'pointer' }}
+            >Play the archive</motion.button>
+          </div>
+        )}
+
         {/* Clue cards */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'clamp(6px, 2vw, 8px)', marginBottom: SECTION_GAP }}>
           {clues.map((c, i) => (
@@ -1109,7 +1157,8 @@ export default function DSAdle() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 4 }}
                     transition={reduceMotion ? INSTANT : { duration: 0.15 }}
-                    style={{ position: 'absolute', bottom: 'calc(100% + 5px)', left: 0, right: 0, background: 'var(--surface)', border: '1px solid var(--border-strong)', borderRadius: 3, boxShadow: 'var(--shadow-drop)', zIndex: 5, overflow: 'hidden' }}
+                    ref={suggestRef}
+                    style={{ position: 'absolute', bottom: 'calc(100% + 5px)', left: 0, right: 0, background: 'var(--surface)', border: '1px solid var(--border-strong)', borderRadius: 3, boxShadow: 'var(--shadow-drop)', zIndex: 5, maxHeight: SUGGEST_MAX_H, overflowY: 'auto', overscrollBehavior: 'contain' }}
                   >
                     {suggestions.map((s) => (
                       <motion.div
@@ -1270,8 +1319,10 @@ export default function DSAdle() {
                         style={{ border: 'none', background: 'none', cursor: 'pointer', padding: `0 ${SIDE_PAD}`, display: 'flex', alignItems: 'center', color: calOpen ? 'var(--text)' : 'var(--text-muted)' }}
                       >
                         <svg viewBox="0 0 16 16" width={15} height={15} style={{ display: 'block' }}>
-                          <circle cx="7" cy="7" r="4.6" stroke="currentColor" strokeWidth="1.6" fill="none" />
-                          <path d="M10.5 10.5 L14 14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" fill="none" />
+                          {/* Calendar: same 16-unit grid, 1.6 stroke and round caps as the app's other glyphs */}
+                          <rect x="2" y="3.2" width="12" height="10.8" rx="1.8" stroke="currentColor" strokeWidth="1.6" fill="none" />
+                          <path d="M2 6.8 L14 6.8 M5.3 1.6 L5.3 4.4 M10.7 1.6 L10.7 4.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" fill="none" />
+                          <rect x="9.4" y="9.2" width="2.4" height="2.4" rx=".5" fill="currentColor" />
                         </svg>
                       </motion.button>
                     </div>
