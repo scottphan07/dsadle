@@ -63,7 +63,7 @@ export default function SandboxFilters({ facets, filter, onChange, onStart, star
         <div style={{ ...sectionLabel }}>Sandbox</div>
         <h1 style={{ margin: '6px 0 0', fontSize: 'clamp(22px, 6vw, 26px)', fontWeight: 800, color: 'var(--text)' }}>Practice by type</h1>
         <p style={{ margin: '6px 0 0', fontSize: 13, lineHeight: 1.45, color: 'var(--text-muted)' }}>
-          Play DSAdle by category using past puzzles,<br />up to {MAX_SESSION_ROUNDS} per session. Today&apos;s puzzle stays hidden.
+          Play DSAdle by category using past puzzles,<br />up to {MAX_SESSION_ROUNDS} per session.
         </p>
       </div>
 
