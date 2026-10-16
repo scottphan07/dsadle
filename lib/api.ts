@@ -103,3 +103,57 @@ export function submitGuesses(dayIdx: number, guesses: string[]): Promise<GuessR
     body: JSON.stringify({ day_idx: dayIdx, guesses }),
   });
 }
+
+// ─── Sandbox ────────────────────────────────────────────────────────────────
+
+export type Difficulty = 'Beginner' | 'Intermediate' | 'Advanced';
+
+export interface TagInfo {
+  slug: string;
+  label: string;
+}
+
+/** One past puzzle the sandbox can serve, without anything that names it. */
+export interface FacetItem {
+  difficulty: Difficulty;
+  tags: string[];
+}
+
+export interface Facets {
+  tags: TagInfo[];
+  items: FacetItem[];
+}
+
+export interface SandboxRound {
+  /** Opaque id for this answer; send it back with each guess. */
+  round_id: string;
+  difficulty: Difficulty;
+  clues: DailyClues;
+  /** The guess list: every name sharing a selected tag, at any difficulty. */
+  candidates: string[];
+}
+
+export interface SandboxFilter {
+  difficulties: Difficulty[];
+  tags: string[];
+}
+
+export function fetchFacets(): Promise<Facets> {
+  return request<Facets>('/api/sandbox/facets');
+}
+
+export function fetchSandboxRound(filter: SandboxFilter, exclude: string[]): Promise<SandboxRound> {
+  return request<SandboxRound>('/api/sandbox/round', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...filter, exclude }),
+  });
+}
+
+export function submitSandboxGuesses(roundId: string, guesses: string[]): Promise<GuessResponse> {
+  return request<GuessResponse>('/api/sandbox/guess', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ round_id: roundId, guesses }),
+  });
+}

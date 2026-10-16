@@ -21,7 +21,7 @@ EPOCH = date(1970, 1, 1)
 CLOCK_SKEW_SLACK_DAYS = 0
 
 
-def _date_for_idx(day_idx: int) -> date:
+def date_for_idx(day_idx: int) -> date:
     return EPOCH + timedelta(days=day_idx)
 
 
@@ -29,7 +29,7 @@ def _idx_for_date(d: date) -> int:
     return (d - EPOCH).days
 
 
-def _today_idx() -> int:
+def today_idx() -> int:
     # Not date.today(), which is server-local and rolls the puzzle over at the
     # wrong moment off UTC. Matches the client's Date.now() / 86400000 exactly.
     return int(time.time() // 86400)
@@ -39,16 +39,49 @@ def _all_questions(db: Session) -> list[models.Question]:
     return list(db.scalars(select(models.Question).order_by(models.Question.id)))
 
 
+def clues_for(answer: models.Question) -> schemas.DailyClues:
+    """The answer-safe clue card. Shared by the daily game and the sandbox."""
+    return schemas.DailyClues(
+        category="Data Structure" if answer.category == "data_structure" else "Algorithm",
+        use_case=answer.use_case,
+        time_clue=f"{answer.top_operation}: {answer.time_complexity}",
+        space_clue=f"Uses {answer.space_complexity} space",
+        code=answer.code,
+    )
+
+
+def evaluate(db: Session, answer: models.Question, guesses: list[str]) -> schemas.GuessResponse:
+    """Score a full guess list against an answer. Shared by the daily game and the sandbox,
+    which differ only in how they pick `answer`.
+    """
+    # Every question is a legal guess, scheduled or not — restricting this to
+    # scheduled ones would narrow the pool to exactly the answer set.
+    known = {q.name for q in _all_questions(db)}
+    unknown = [g for g in guesses if g not in known]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown guesses: {unknown}")
+
+    results = [g == answer.name for g in guesses]
+    won = any(results)
+    game_over = won or len(guesses) >= MAX_GUESSES
+    return schemas.GuessResponse(
+        results=results,
+        won=won,
+        game_over=game_over,
+        reveal=schemas.Reveal(name=answer.name, description=answer.description) if game_over else None,
+    )
+
+
 def _answer_for_day(db: Session, day_idx: int) -> models.Question:
     """The question scheduled for that day, or 404.
 
     No lower bound: dates before the schedule, gaps in it, and negative indices
     all simply have no row.
     """
-    if day_idx > _today_idx() + CLOCK_SKEW_SLACK_DAYS:
+    if day_idx > today_idx() + CLOCK_SKEW_SLACK_DAYS:
         raise HTTPException(status_code=404, detail="No puzzle for that day")
     answer = db.scalar(
-        select(models.Question).where(models.Question.puzzle_date == _date_for_idx(day_idx))
+        select(models.Question).where(models.Question.puzzle_date == date_for_idx(day_idx))
     )
     if answer is None:
         raise HTTPException(status_code=404, detail="No puzzle for that day")
@@ -69,7 +102,7 @@ def day_range(db: Session = Depends(get_db)):
     serves; an unscheduled bank returns nulls rather than a 503, which the UI
     could not tell apart from the server being down.
     """
-    today = _today_idx()
+    today = today_idx()
     scheduled = db.scalars(
         select(models.Question.puzzle_date)
         .where(models.Question.puzzle_date.is_not(None))
@@ -89,17 +122,7 @@ def day_range(db: Session = Depends(get_db)):
 @router.get("/daily/{day_idx}", response_model=schemas.DailyOut)
 def daily(day_idx: int, db: Session = Depends(get_db)):
     """The clues for a given day. Never includes the answer's name or description."""
-    answer = _answer_for_day(db, day_idx)
-    return schemas.DailyOut(
-        day_idx=day_idx,
-        clues=schemas.DailyClues(
-            category="Data Structure" if answer.category == "data_structure" else "Algorithm",
-            use_case=answer.use_case,
-            time_clue=f"{answer.top_operation}: {answer.time_complexity}",
-            space_clue=f"Uses {answer.space_complexity} space",
-            code=answer.code,
-        ),
-    )
+    return schemas.DailyOut(day_idx=day_idx, clues=clues_for(_answer_for_day(db, day_idx)))
 
 
 @router.post("/guess", response_model=schemas.GuessResponse)
@@ -109,21 +132,4 @@ def guess(req: schemas.GuessRequest, db: Session = Depends(get_db)):
     Stateless: the client sends every guess it has made so far, so the same
     endpoint validates a new guess and reconstructs a saved game on reload.
     """
-    answer = _answer_for_day(db, req.day_idx)
-
-    # Every question is a legal guess, scheduled or not — restricting this to
-    # scheduled ones would narrow the pool to exactly the answer set.
-    known = {q.name for q in _all_questions(db)}
-    unknown = [g for g in req.guesses if g not in known]
-    if unknown:
-        raise HTTPException(status_code=422, detail=f"Unknown guesses: {unknown}")
-
-    results = [g == answer.name for g in req.guesses]
-    won = any(results)
-    game_over = won or len(req.guesses) >= MAX_GUESSES
-    return schemas.GuessResponse(
-        results=results,
-        won=won,
-        game_over=game_over,
-        reveal=schemas.Reveal(name=answer.name, description=answer.description) if game_over else None,
-    )
+    return evaluate(db, _answer_for_day(db, req.day_idx), req.guesses)

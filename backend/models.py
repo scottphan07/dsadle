@@ -1,10 +1,26 @@
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import Date, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Date, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
+
+
+class QuestionTag(Base):
+    """One (question, tag) pair: the join table behind multi-tag filtering.
+
+    A question has several rows here (Minimum Spanning Tree → graph, tree), so
+    "every Tree question" is a single indexed lookup on `tag` rather than a
+    string search. Tags are slugs from tags.py.
+    """
+
+    __tablename__ = "question_tags"
+
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id", ondelete="CASCADE"), primary_key=True
+    )
+    tag: Mapped[str] = mapped_column(String, primary_key=True, index=True)
 
 
 class Question(Base):
@@ -29,3 +45,22 @@ class Question(Base):
     puzzle_date: Mapped[Optional[date]] = mapped_column(
         Date, unique=True, index=True, nullable=True, default=None
     )
+
+    # selectin: one extra query loads the tags for every question in a list,
+    # instead of one query per question.
+    tag_rows: Mapped[list[QuestionTag]] = relationship(
+        cascade="all, delete-orphan", lazy="selectin", order_by=QuestionTag.tag
+    )
+
+    @property
+    def tags(self) -> list[str]:
+        return [row.tag for row in self.tag_rows]
+
+    @tags.setter
+    def tags(self, value: list[str]) -> None:
+        # Lets Question(**payload) and setattr(question, "tags", ...) work like
+        # any other column for the seed script and the admin API.
+        # Existing rows are kept rather than recreated: deleting and re-inserting
+        # the same (question_id, tag) key in one flush can trip the primary key.
+        current = {row.tag: row for row in self.tag_rows}
+        self.tag_rows = [current.get(t) or QuestionTag(tag=t) for t in dict.fromkeys(value)]

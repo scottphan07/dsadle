@@ -3,9 +3,9 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-import models  # noqa: F401 — registers the Question model with Base.metadata
+import models  # noqa: F401 — registers the Question and QuestionTag models with Base.metadata
 from database import Base, engine
-from routers import game, questions
+from routers import game, questions, sandbox
 
 Base.metadata.create_all(bind=engine)
 
@@ -40,6 +40,7 @@ app.add_middleware(
 
 app.include_router(game.router)
 app.include_router(questions.router)
+app.include_router(sandbox.router)
 
 
 @app.get("/", tags=["health"])

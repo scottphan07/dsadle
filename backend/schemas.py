@@ -3,6 +3,13 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tags import TAGS
+
+# Literal over the closed vocabulary, so an unknown tag is a 422 from the admin
+# API and an error from validate_seed.py instead of a silently orphaned filter.
+Tag = Literal[tuple(TAGS)]
+Difficulty = Literal["Beginner", "Intermediate", "Advanced"]
+
 # ── Question admin schemas ──────────────────────────────────────────────────
 
 
@@ -12,7 +19,10 @@ class QuestionBase(BaseModel):
     family: str = Field(min_length=1)
     time_complexity: str = Field(min_length=1, examples=["O(n log n)"])
     space_complexity: str = Field(min_length=1, examples=["O(1)"])
-    difficulty: Literal["Beginner", "Intermediate", "Advanced"]
+    difficulty: Difficulty
+    # At least one: an untagged question could never be reached from a family
+    # filter in the sandbox.
+    tags: list[Tag] = Field(min_length=1, examples=[["graph", "tree"]])
     top_operation: str = "Running time"
     use_case: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -35,7 +45,8 @@ class QuestionUpdate(BaseModel):
     family: Optional[str] = None
     time_complexity: Optional[str] = None
     space_complexity: Optional[str] = None
-    difficulty: Optional[Literal["Beginner", "Intermediate", "Advanced"]] = None
+    difficulty: Optional[Difficulty] = None
+    tags: Optional[list[Tag]] = Field(default=None, min_length=1)
     top_operation: Optional[str] = None
     use_case: Optional[str] = None
     description: Optional[str] = None
@@ -98,3 +109,51 @@ class GuessResponse(BaseModel):
     won: bool
     game_over: bool
     reveal: Optional[Reveal] = None  # only present once the game is over
+
+
+# ── Sandbox schemas ─────────────────────────────────────────────────────────
+
+
+class TagInfo(BaseModel):
+    slug: str
+    label: str
+
+
+class FacetItem(BaseModel):
+    """One eligible puzzle, minus anything that identifies it.
+
+    The client computes every chip count from this list, which is exact for
+    multi-tag unions in a way that precomputed (difficulty, tag) pair counts
+    can't be: a puzzle tagged both graph and tree would be counted twice.
+    """
+
+    difficulty: str
+    tags: list[str]
+
+
+class FacetsOut(BaseModel):
+    tags: list[TagInfo]
+    items: list[FacetItem]
+
+
+class SandboxRoundRequest(BaseModel):
+    # Empty list = no filter on that dimension.
+    difficulties: list[Difficulty] = []
+    tags: list[Tag] = []
+    # round_ids already played this session, to avoid immediate repeats. Ignored
+    # once every match has been played.
+    exclude: list[str] = Field(default=[], max_length=500)
+
+
+class SandboxRoundOut(BaseModel):
+    # Opaque: an HMAC of the answer, so it can't be matched against the name list.
+    round_id: str
+    difficulty: str
+    clues: DailyClues
+    # The guess list: every name sharing a selected tag, at any difficulty.
+    candidates: list[str]
+
+
+class SandboxGuessRequest(BaseModel):
+    round_id: str = Field(min_length=1, max_length=64)
+    guesses: list[str] = Field(min_length=1, max_length=5)

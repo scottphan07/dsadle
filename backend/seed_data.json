@@ -3,6 +3,9 @@
     "name": "Fractional Knapsack",
     "category": "algorithm",
     "family": "Greedy",
+    "tags": [
+      "greedy"
+    ],
     "time_complexity": "O(n log n)",
     "space_complexity": "O(1)",
     "difficulty": "Intermediate",
@@ -16,6 +19,9 @@
     "name": "Queue",
     "category": "data_structure",
     "family": "Stack / Queue",
+    "tags": [
+      "linear"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n)",
     "difficulty": "Beginner",
@@ -29,6 +35,9 @@
     "name": "Divide and Conquer",
     "category": "algorithm",
     "family": "Paradigm",
+    "tags": [
+      "divide-and-conquer"
+    ],
     "time_complexity": "O(n log n)",
     "space_complexity": "O(log n)",
     "difficulty": "Intermediate",
@@ -42,6 +51,9 @@
     "name": "Stack",
     "category": "data_structure",
     "family": "Stack / Queue",
+    "tags": [
+      "linear"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n)",
     "difficulty": "Beginner",
@@ -55,6 +67,10 @@
     "name": "Dijkstra",
     "category": "algorithm",
     "family": "Graph",
+    "tags": [
+      "graph",
+      "greedy"
+    ],
     "time_complexity": "O(n log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -68,6 +84,10 @@
     "name": "Fenwick Tree",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree",
+      "range-query"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -81,6 +101,9 @@
     "name": "Array",
     "category": "data_structure",
     "family": "Array / List",
+    "tags": [
+      "linear"
+    ],
     "time_complexity": "O(n)",
     "space_complexity": "O(n)",
     "difficulty": "Beginner",
@@ -94,6 +117,10 @@
     "name": "Topological Sort",
     "category": "algorithm",
     "family": "Graph",
+    "tags": [
+      "graph",
+      "sorting"
+    ],
     "time_complexity": "O(n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -107,6 +134,10 @@
     "name": "Binary Search",
     "category": "algorithm",
     "family": "Searching",
+    "tags": [
+      "searching",
+      "divide-and-conquer"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(1)",
     "difficulty": "Beginner",
@@ -120,6 +151,9 @@
     "name": "0/1 Knapsack",
     "category": "algorithm",
     "family": "Dynamic Programming",
+    "tags": [
+      "dynamic-programming"
+    ],
     "time_complexity": "O(n²)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -133,6 +167,9 @@
     "name": "Sieve of Eratosthenes",
     "category": "algorithm",
     "family": "Number Theory",
+    "tags": [
+      "math"
+    ],
     "time_complexity": "O(n log log n)",
     "space_complexity": "O(n)",
     "difficulty": "Beginner",
@@ -146,6 +183,10 @@
     "name": "Breadth-First Search",
     "category": "algorithm",
     "family": "Graph",
+    "tags": [
+      "graph",
+      "searching"
+    ],
     "time_complexity": "O(n)",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -159,6 +200,10 @@
     "name": "AVL Tree",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree",
+      "searching"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -172,6 +217,10 @@
     "name": "Trie",
     "category": "data_structure",
     "family": "Trie",
+    "tags": [
+      "tree",
+      "string"
+    ],
     "time_complexity": "O(n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -185,6 +234,10 @@
     "name": "Heap",
     "category": "data_structure",
     "family": "Heap",
+    "tags": [
+      "heap",
+      "tree"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -198,6 +251,10 @@
     "name": "Convex Hull",
     "category": "algorithm",
     "family": "Computational Geometry",
+    "tags": [
+      "math",
+      "sorting"
+    ],
     "time_complexity": "O(n log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -211,6 +268,9 @@
     "name": "Graph",
     "category": "data_structure",
     "family": "Graph",
+    "tags": [
+      "graph"
+    ],
     "time_complexity": "O(n)",
     "space_complexity": "O(n²)",
     "difficulty": "Intermediate",
@@ -224,6 +284,10 @@
     "name": "Segment Tree",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree",
+      "range-query"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -237,6 +301,10 @@
     "name": "Floyd-Warshall",
     "category": "algorithm",
     "family": "Graph",
+    "tags": [
+      "graph",
+      "dynamic-programming"
+    ],
     "time_complexity": "O(V³)",
     "space_complexity": "O(V²)",
     "difficulty": "Advanced",
@@ -250,6 +318,10 @@
     "name": "Binary Search Tree",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree",
+      "searching"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -263,6 +335,9 @@
     "name": "Tree",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree"
+    ],
     "time_complexity": "O(n)",
     "space_complexity": "O(n)",
     "difficulty": "Beginner",
@@ -276,6 +351,9 @@
     "name": "Hash Table",
     "category": "data_structure",
     "family": "Hash",
+    "tags": [
+      "hashing"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -289,6 +367,10 @@
     "name": "Longest Common Subsequence",
     "category": "algorithm",
     "family": "Dynamic Programming",
+    "tags": [
+      "dynamic-programming",
+      "string"
+    ],
     "time_complexity": "O(n²)",
     "space_complexity": "O(n²)",
     "difficulty": "Advanced",
@@ -302,6 +384,9 @@
     "name": "Activity Selection",
     "category": "algorithm",
     "family": "Greedy",
+    "tags": [
+      "greedy"
+    ],
     "time_complexity": "O(n log n)",
     "space_complexity": "O(1)",
     "difficulty": "Intermediate",
@@ -315,6 +400,10 @@
     "name": "Minimum Spanning Tree",
     "category": "data_structure",
     "family": "Graph",
+    "tags": [
+      "graph",
+      "tree"
+    ],
     "time_complexity": "O(E log V)",
     "space_complexity": "O(V + E)",
     "difficulty": "Advanced",
@@ -328,6 +417,9 @@
     "name": "Longest Increasing Subsequence",
     "category": "algorithm",
     "family": "Dynamic Programming",
+    "tags": [
+      "dynamic-programming"
+    ],
     "time_complexity": "O(n log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -341,6 +433,10 @@
     "name": "Quick Sort",
     "category": "algorithm",
     "family": "Sorting",
+    "tags": [
+      "sorting",
+      "divide-and-conquer"
+    ],
     "time_complexity": "O(n log n)",
     "space_complexity": "O(log n)",
     "difficulty": "Intermediate",
@@ -354,6 +450,9 @@
     "name": "Linked List",
     "category": "data_structure",
     "family": "Array / List",
+    "tags": [
+      "linear"
+    ],
     "time_complexity": "O(n)",
     "space_complexity": "O(n)",
     "difficulty": "Beginner",
@@ -367,6 +466,9 @@
     "name": "Union-Find",
     "category": "data_structure",
     "family": "Disjoint Set",
+    "tags": [
+      "graph"
+    ],
     "time_complexity": "O(α(n))",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -380,6 +482,10 @@
     "name": "Knuth-Morris-Pratt",
     "category": "algorithm",
     "family": "String Matching",
+    "tags": [
+      "string",
+      "searching"
+    ],
     "time_complexity": "O(n + m)",
     "space_complexity": "O(m)",
     "difficulty": "Advanced",
@@ -393,6 +499,10 @@
     "name": "B-Tree",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree",
+      "searching"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -406,6 +516,9 @@
     "name": "Deque",
     "category": "data_structure",
     "family": "Stack / Queue",
+    "tags": [
+      "linear"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n)",
     "difficulty": "Beginner",
@@ -419,6 +532,10 @@
     "name": "Red-Black Tree",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree",
+      "searching"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -432,6 +549,10 @@
     "name": "Depth-First Search",
     "category": "algorithm",
     "family": "Graph",
+    "tags": [
+      "graph",
+      "searching"
+    ],
     "time_complexity": "O(V + E)",
     "space_complexity": "O(V)",
     "difficulty": "Intermediate",
@@ -445,6 +566,9 @@
     "name": "Circular Buffer",
     "category": "data_structure",
     "family": "Array / List",
+    "tags": [
+      "linear"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(k)",
     "difficulty": "Beginner",
@@ -458,6 +582,10 @@
     "name": "Bloom Filter",
     "category": "data_structure",
     "family": "Probabilistic",
+    "tags": [
+      "probabilistic",
+      "hashing"
+    ],
     "time_complexity": "O(k)",
     "space_complexity": "O(m)",
     "difficulty": "Intermediate",
@@ -471,6 +599,10 @@
     "name": "LRU Cache",
     "category": "data_structure",
     "family": "Hash",
+    "tags": [
+      "hashing",
+      "linear"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(k)",
     "difficulty": "Intermediate",
@@ -484,6 +616,11 @@
     "name": "Skip List",
     "category": "data_structure",
     "family": "Array / List",
+    "tags": [
+      "linear",
+      "searching",
+      "probabilistic"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -497,6 +634,10 @@
     "name": "Kruskal's Algorithm",
     "category": "algorithm",
     "family": "Graph",
+    "tags": [
+      "graph",
+      "greedy"
+    ],
     "time_complexity": "O(E log E)",
     "space_complexity": "O(V)",
     "difficulty": "Intermediate",
@@ -510,6 +651,9 @@
     "name": "Monotonic Stack",
     "category": "data_structure",
     "family": "Stack / Queue",
+    "tags": [
+      "linear"
+    ],
     "time_complexity": "O(n)",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -523,6 +667,9 @@
     "name": "Adjacency Matrix",
     "category": "data_structure",
     "family": "Graph",
+    "tags": [
+      "graph"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(V²)",
     "difficulty": "Beginner",
@@ -536,6 +683,10 @@
     "name": "Merkle Tree",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree",
+      "hashing"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -549,6 +700,9 @@
     "name": "Bitset",
     "category": "data_structure",
     "family": "Array / List",
+    "tags": [
+      "linear"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -562,6 +716,9 @@
     "name": "Insertion Sort",
     "category": "algorithm",
     "family": "Sorting",
+    "tags": [
+      "sorting"
+    ],
     "time_complexity": "O(n²)",
     "space_complexity": "O(1)",
     "difficulty": "Beginner",
@@ -575,6 +732,10 @@
     "name": "Splay Tree",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree",
+      "searching"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -588,6 +749,10 @@
     "name": "k-d Tree",
     "category": "data_structure",
     "family": "Spatial",
+    "tags": [
+      "spatial",
+      "tree"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -601,6 +766,10 @@
     "name": "Inverted Index",
     "category": "data_structure",
     "family": "Hash",
+    "tags": [
+      "hashing",
+      "string"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -614,6 +783,10 @@
     "name": "Count-Min Sketch",
     "category": "data_structure",
     "family": "Probabilistic",
+    "tags": [
+      "probabilistic",
+      "hashing"
+    ],
     "time_complexity": "O(d)",
     "space_complexity": "O(w·d)",
     "difficulty": "Advanced",
@@ -627,6 +800,10 @@
     "name": "Merge Sort",
     "category": "algorithm",
     "family": "Sorting",
+    "tags": [
+      "sorting",
+      "divide-and-conquer"
+    ],
     "time_complexity": "O(n log n)",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -640,6 +817,10 @@
     "name": "Gap Buffer",
     "category": "data_structure",
     "family": "Array / List",
+    "tags": [
+      "linear",
+      "string"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -653,6 +834,9 @@
     "name": "Separate Chaining",
     "category": "data_structure",
     "family": "Hash",
+    "tags": [
+      "hashing"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n + m)",
     "difficulty": "Intermediate",
@@ -666,6 +850,10 @@
     "name": "Interval Tree",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree",
+      "range-query"
+    ],
     "time_complexity": "O(log n + k)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -679,6 +867,9 @@
     "name": "Directed Acyclic Graph",
     "category": "data_structure",
     "family": "Graph",
+    "tags": [
+      "graph"
+    ],
     "time_complexity": "O(V + E)",
     "space_complexity": "O(V + E)",
     "difficulty": "Intermediate",
@@ -692,6 +883,10 @@
     "name": "Prim's Algorithm",
     "category": "algorithm",
     "family": "Graph",
+    "tags": [
+      "graph",
+      "greedy"
+    ],
     "time_complexity": "O(E log V)",
     "space_complexity": "O(V)",
     "difficulty": "Intermediate",
@@ -705,6 +900,10 @@
     "name": "Treap",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree",
+      "probabilistic"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -718,6 +917,10 @@
     "name": "Spatial Hash",
     "category": "data_structure",
     "family": "Spatial",
+    "tags": [
+      "spatial",
+      "hashing"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -731,6 +934,9 @@
     "name": "Doubly Linked List",
     "category": "data_structure",
     "family": "Array / List",
+    "tags": [
+      "linear"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n)",
     "difficulty": "Beginner",
@@ -744,6 +950,10 @@
     "name": "Suffix Array",
     "category": "data_structure",
     "family": "String",
+    "tags": [
+      "string",
+      "searching"
+    ],
     "time_complexity": "O(n log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -757,6 +967,10 @@
     "name": "Heap Sort",
     "category": "algorithm",
     "family": "Sorting",
+    "tags": [
+      "sorting",
+      "heap"
+    ],
     "time_complexity": "O(n log n)",
     "space_complexity": "O(1)",
     "difficulty": "Intermediate",
@@ -770,6 +984,10 @@
     "name": "Rope",
     "category": "data_structure",
     "family": "String",
+    "tags": [
+      "string",
+      "tree"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -783,6 +1001,10 @@
     "name": "B+ Tree",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree",
+      "searching"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -796,6 +1018,9 @@
     "name": "Linear Probing",
     "category": "data_structure",
     "family": "Hash",
+    "tags": [
+      "hashing"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(m)",
     "difficulty": "Intermediate",
@@ -809,6 +1034,10 @@
     "name": "Sparse Table",
     "category": "data_structure",
     "family": "Range Query",
+    "tags": [
+      "range-query",
+      "dynamic-programming"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n log n)",
     "difficulty": "Advanced",
@@ -822,6 +1051,10 @@
     "name": "Huffman Tree",
     "category": "data_structure",
     "family": "Tree",
+    "tags": [
+      "tree",
+      "greedy"
+    ],
     "time_complexity": "O(n log n)",
     "space_complexity": "O(n)",
     "difficulty": "Intermediate",
@@ -835,6 +1068,10 @@
     "name": "Binomial Heap",
     "category": "data_structure",
     "family": "Heap",
+    "tags": [
+      "heap",
+      "tree"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -848,6 +1085,10 @@
     "name": "Octree",
     "category": "data_structure",
     "family": "Spatial",
+    "tags": [
+      "spatial",
+      "tree"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -861,6 +1102,9 @@
     "name": "Adjacency List",
     "category": "data_structure",
     "family": "Graph",
+    "tags": [
+      "graph"
+    ],
     "time_complexity": "O(deg(v))",
     "space_complexity": "O(V + E)",
     "difficulty": "Beginner",
@@ -874,6 +1118,10 @@
     "name": "Radix Tree",
     "category": "data_structure",
     "family": "Trie",
+    "tags": [
+      "tree",
+      "string"
+    ],
     "time_complexity": "O(k)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -887,6 +1135,9 @@
     "name": "In-Order Traversal",
     "category": "algorithm",
     "family": "Tree",
+    "tags": [
+      "tree"
+    ],
     "time_complexity": "O(n)",
     "space_complexity": "O(h)",
     "difficulty": "Beginner",
@@ -900,6 +1151,9 @@
     "name": "Cuckoo Hash Table",
     "category": "data_structure",
     "family": "Hash",
+    "tags": [
+      "hashing"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -913,6 +1167,9 @@
     "name": "Sparse Matrix",
     "category": "data_structure",
     "family": "Array / List",
+    "tags": [
+      "linear"
+    ],
     "time_complexity": "O(nnz)",
     "space_complexity": "O(nnz)",
     "difficulty": "Intermediate",
@@ -926,6 +1183,10 @@
     "name": "Quadtree",
     "category": "data_structure",
     "family": "Spatial",
+    "tags": [
+      "spatial",
+      "tree"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -939,6 +1200,10 @@
     "name": "HyperLogLog",
     "category": "data_structure",
     "family": "Probabilistic",
+    "tags": [
+      "probabilistic",
+      "hashing"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(m)",
     "difficulty": "Advanced",
@@ -952,6 +1217,9 @@
     "name": "Heapify",
     "category": "algorithm",
     "family": "Heap",
+    "tags": [
+      "heap"
+    ],
     "time_complexity": "O(n)",
     "space_complexity": "O(1)",
     "difficulty": "Intermediate",
@@ -965,6 +1233,10 @@
     "name": "Leftist Heap",
     "category": "data_structure",
     "family": "Heap",
+    "tags": [
+      "heap",
+      "tree"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -978,6 +1250,10 @@
     "name": "R-Tree",
     "category": "data_structure",
     "family": "Spatial",
+    "tags": [
+      "spatial",
+      "tree"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -991,6 +1267,9 @@
     "name": "Dynamic Array",
     "category": "data_structure",
     "family": "Array / List",
+    "tags": [
+      "linear"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n)",
     "difficulty": "Beginner",
@@ -1004,6 +1283,10 @@
     "name": "Fibonacci Heap",
     "category": "data_structure",
     "family": "Heap",
+    "tags": [
+      "heap",
+      "tree"
+    ],
     "time_complexity": "O(1)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -1017,6 +1300,9 @@
     "name": "Edge List",
     "category": "data_structure",
     "family": "Graph",
+    "tags": [
+      "graph"
+    ],
     "time_complexity": "O(E)",
     "space_complexity": "O(E)",
     "difficulty": "Beginner",
@@ -1030,6 +1316,10 @@
     "name": "Ternary Search Tree",
     "category": "data_structure",
     "family": "Trie",
+    "tags": [
+      "tree",
+      "string"
+    ],
     "time_complexity": "O(k + log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",
@@ -1043,6 +1333,10 @@
     "name": "Min-Max Heap",
     "category": "data_structure",
     "family": "Heap",
+    "tags": [
+      "heap",
+      "tree"
+    ],
     "time_complexity": "O(log n)",
     "space_complexity": "O(n)",
     "difficulty": "Advanced",

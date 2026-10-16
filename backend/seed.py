@@ -19,7 +19,7 @@ from pathlib import Path
 from sqlalchemy import delete
 
 from database import Base, SessionLocal, engine
-from models import Question
+from models import Question, QuestionTag
 from validate_seed import SEED_FILE, load_and_validate
 
 
@@ -57,6 +57,10 @@ def seed(path: Path = SEED_FILE, replace: bool = False, dry_run: bool = False) -
         # Delete and insert in ONE transaction: the old rows are gone before the
         # new ones insert, so reused names or dates can't trip the unique
         # indexes, and a crash rolls back to the old bank rather than no bank.
+        # Tags first: a bulk delete skips the ORM cascade, and SQLite doesn't
+        # enforce foreign keys by default, so question_tags rows would otherwise
+        # survive and attach themselves to whichever new question reuses the id.
+        db.execute(delete(QuestionTag))
         db.execute(delete(Question))
         db.add_all(questions)
 

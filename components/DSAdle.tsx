@@ -4,9 +4,17 @@ import { useState, useEffect, useLayoutEffect, useMemo, useRef, KeyboardEvent, C
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
   fetchNames, fetchDaily, fetchRange, submitGuesses,
+  fetchFacets, fetchSandboxRound, submitSandboxGuesses,
   ApiError, TimeoutError, NetworkError,
-  DailyClues, DayRange, Reveal,
+  DailyClues, DayRange, Reveal, Difficulty, Facets, SandboxFilter,
 } from '@/lib/api';
+import {
+  ActiveSession, SessionSummary,
+  filterLabel, readActiveSession, readSandboxStats, recordSession, saveActiveSession,
+  settlePending, summarize,
+} from '@/lib/sandbox';
+import SandboxFilters from './SandboxFilters';
+import { GlobalStatsModal, SessionEndModal } from './StatsModals';
 
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
 
@@ -17,12 +25,14 @@ const SLOW_LOAD_MS = 3000;
 // Failures are reported twice: the player gets a sentence in the game's voice,
 // the developer gets the status code, error name and original object in the console.
 
-type ErrorContext = 'load' | 'guess' | 'restore';
+type ErrorContext = 'load' | 'guess' | 'restore' | 'round' | 'facets';
 
 const ATTEMPTED: Record<ErrorContext, string> = {
   load: "Couldn't grab the DSAdle",
   guess: "Couldn't grade your guess",
   restore: "Couldn't pick your game back up",
+  round: "Couldn't start a sandbox round",
+  facets: "Couldn't load the sandbox filters",
 };
 
 // Named in terms of DSAdle, not the stack behind it: the player can't act on
@@ -39,6 +49,9 @@ function reasonFor(err: unknown): string {
 }
 
 function describeError(context: ErrorContext, err: unknown): string {
+  if (context === 'round' && err instanceof ApiError && err.status === 404) {
+    return `${ATTEMPTED.round}. No past puzzles match that filter.`;
+  }
   // A 404 is permanent for that day, so it must not invite a retry.
   const retryable = !(err instanceof ApiError && err.status === 404);
   return `${ATTEMPTED[context]}. ${reasonFor(err)}${retryable ? ' Try again in a moment.' : ''}`;
@@ -642,6 +655,26 @@ export default function DSAdle() {
   // that re-runs the load effect instead of desyncing dayIdx from `daily`.
   const [todayIdx, setTodayIdx] = useState(todayIndex);
 
+  // ── Sandbox state ──
+  // 'daily' covers today and the archive; 'sandbox' swaps the puzzle source for
+  // random past puzzles. The board (clues, guesses, input, code window) is shared.
+  const [mode, setMode] = useState<'daily' | 'sandbox'>('daily');
+  const [facets, setFacets] = useState<Facets | null>(null);
+  const [sandboxFilter, setSandboxFilter] = useState<SandboxFilter>({ difficulties: [], tags: [] });
+  // Null on the filter screen; set while a session is running.
+  const [session, setSession] = useState<ActiveSession | null>(null);
+  const [roundId, setRoundId] = useState<string | null>(null);
+  const [roundDifficulty, setRoundDifficulty] = useState<Difficulty | null>(null);
+  const [sessionEnd, setSessionEnd] = useState<{ summary: SessionSummary; rank: number | null; rounds: boolean[] } | null>(null);
+  // Bumped by every round request, so a slow response for an abandoned round is dropped.
+  const roundReq = useRef(0);
+  // The round a guess was made for, checked when the response lands: navigating
+  // away mid-request must not paint one puzzle's result onto another.
+  const roundIdRef = useRef<string | null>(null);
+
+  // Global stats, from the header icon. Separate from `endOpen`, the post-game popup.
+  const [statsOpen, setStatsOpen] = useState(false);
+
   useEffect(() => {
     const id = setInterval(() => {
       setTodayIdx((prev) => {
@@ -677,6 +710,8 @@ export default function DSAdle() {
       const d = new Date(todayIdx * 86400000);
       return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
     });
+    // The sandbox loads its own rounds; this effect re-runs on the way back.
+    if (mode === 'sandbox') return;
     let cancelled = false;
     async function load() {
       setLoading(true);
@@ -737,7 +772,25 @@ export default function DSAdle() {
     }
     load();
     return () => { cancelled = true; };
-  }, [offset, retryTick, todayIdx]);
+  }, [offset, retryTick, todayIdx, mode]);
+
+  // Filter counts, fetched once when the sandbox (or the stats popup, for tag
+  // labels) first needs them. Past puzzles only change at rollover.
+  const wantFacets = mode === 'sandbox' || statsOpen;
+  useEffect(() => {
+    if (!wantFacets) return;
+    let cancelled = false;
+    fetchFacets()
+      .then((f) => { if (!cancelled) setFacets(f); })
+      .catch((err) => {
+        if (cancelled) return;
+        logError('facets', err);
+        if (mode === 'sandbox' && !session) setError(describeError('facets', err));
+      });
+    return () => { cancelled = true; };
+    // `mode`/`session` only gate the error message; refetching on them is pointless
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantFacets, todayIdx, retryTick]);
 
   // The schedule only changes at rollover, so this needn't follow `offset`.
   useEffect(() => {
@@ -829,6 +882,7 @@ export default function DSAdle() {
   async function submit(name: string) {
     if (isOver || submitting) return;
     if (!names.includes(name) || guesses.includes(name)) return;
+    if (mode === 'sandbox') return submitSandbox(name);
     const next = [...guesses, name];
     setSubmitting(true);
     try {
@@ -849,6 +903,41 @@ export default function DSAdle() {
       setDropdownOpen(false);
       setHi(0);
     } catch (err) {
+      logError('guess', err);
+      setError(describeError('guess', err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function submitSandbox(name: string) {
+    const id = roundId;
+    if (!id || !session || !roundDifficulty) return;
+    const next = [...guesses, name];
+    setSubmitting(true);
+    try {
+      const r = await submitSandboxGuesses(id, next);
+      // The player moved on (new round, ended session, left the sandbox) while
+      // this was in flight: the result belongs to a board that's gone.
+      if (roundIdRef.current !== id) return;
+      setGuesses(next);
+      setResults(r.results);
+      setReveal(r.reveal);
+      const updated: ActiveSession = r.game_over
+        ? {
+            ...session,
+            rounds: [...session.rounds, { roundId: id, difficulty: roundDifficulty, won: r.won, guesses: next.length }],
+            pending: null,
+          }
+        : { ...session, pending: { roundId: id, difficulty: roundDifficulty, guesses: next.length } };
+      setSession(updated);
+      saveActiveSession(updated);
+      setError(null);
+      setQ('');
+      setDropdownOpen(false);
+      setHi(0);
+    } catch (err) {
+      if (roundIdRef.current !== id) return;
       logError('guess', err);
       setError(describeError('guess', err));
     } finally {
@@ -904,14 +993,125 @@ export default function DSAdle() {
   }
 
   function navigateTo(target: number) {
+    leaveSandbox();
     setOffset(clampOffset(target));
     setQ('');
     setDropdownOpen(false);
   }
 
+  // ── Sandbox actions ───────────────────────────────────────────────────────
+
+  // Clears the shared board. The session itself lives on in localStorage, so
+  // leaving the sandbox mid-session and coming back resumes it.
+  function resetBoard() {
+    roundReq.current++;
+    roundIdRef.current = null;
+    if (endTimer.current) clearTimeout(endTimer.current);
+    setEndOpen(false);
+    setDaily(null);
+    setGuesses([]);
+    setResults([]);
+    setReveal(null);
+    setRoundId(null);
+    setRoundDifficulty(null);
+    setError(null);
+    setNoPuzzle(false);
+    setLoading(false);
+    setQ('');
+    setDropdownOpen(false);
+    setHi(0);
+  }
+
+  function leaveSandbox() {
+    if (mode !== 'sandbox') return;
+    resetBoard();
+    setSession(null);
+    setMode('daily');
+  }
+
+  function openSandbox() {
+    setSideOpen(false);
+    if (mode === 'sandbox') return;
+    resetBoard();
+    setMode('sandbox');
+    const active = readActiveSession();
+    if (active) {
+      // A round left mid-way (reload, closed tab) counts as a loss if it had guesses.
+      const settled = settlePending(active);
+      saveActiveSession(settled);
+      setSession(settled);
+      setSandboxFilter(settled.filter);
+      loadRound(settled);
+    } else {
+      setSession(null);
+    }
+  }
+
+  async function loadRound(sess: ActiveSession) {
+    const req = ++roundReq.current;
+    roundIdRef.current = null;
+    setLoading(true);
+    setError(null);
+    setDaily(null);
+    setGuesses([]);
+    setResults([]);
+    setReveal(null);
+    setRoundId(null);
+    setQ('');
+    setDropdownOpen(false);
+    try {
+      const r = await fetchSandboxRound(sess.filter, sess.rounds.map((x) => x.roundId));
+      if (req !== roundReq.current) return;
+      roundIdRef.current = r.round_id;
+      setRoundId(r.round_id);
+      setRoundDifficulty(r.difficulty);
+      setNames(r.candidates);
+      setDaily(r.clues);
+      const withPending = { ...sess, pending: { roundId: r.round_id, difficulty: r.difficulty, guesses: 0 } };
+      setSession(withPending);
+      saveActiveSession(withPending);
+    } catch (err) {
+      if (req !== roundReq.current) return;
+      logError('round', err);
+      setError(describeError('round', err));
+    } finally {
+      if (req === roundReq.current) setLoading(false);
+    }
+  }
+
+  function startSession(filter: SandboxFilter) {
+    const fresh: ActiveSession = { filter, rounds: [], pending: null, startedAt: Date.now() };
+    setSandboxFilter(filter);
+    setSession(fresh);
+    saveActiveSession(fresh);
+    loadRound(fresh);
+  }
+
+  function endSession() {
+    if (!session) return;
+    const settled = settlePending(session);
+    saveActiveSession(null);
+    resetBoard();
+    setSession(null);
+    if (settled.rounds.length === 0) return; // nothing played: straight back to the filters
+    const summary = summarize(settled);
+    const rank = recordSession(summary);
+    setSessionEnd({ summary, rank, rounds: settled.rounds.map((r) => r.won) });
+  }
+
+  function retry() {
+    if (mode === 'sandbox' && session) loadRound(session);
+    else setRetryTick((t) => t + 1);
+  }
+
   function goHome() {
     navigateTo(0);
     setSideOpen(false);
+  }
+
+  function openArchive() {
+    setSideOpen(true);
+    setSideView('archive');
   }
 
   // Shared by the archive list and the calendar; navigateTo clamps out the future
@@ -1049,6 +1249,33 @@ export default function DSAdle() {
     setEndOpen(false);
   }
 
+  // ── Global stats ──────────────────────────────────────────────────────────
+
+  // Read only while the popup is open, like endInfo: both walk localStorage.
+  const globalDaily = useMemo(
+    () => (statsOpen ? computeStats(scheduledDays, todayIdx) : null),
+    [statsOpen, scheduledDays, todayIdx],
+  );
+  const sandboxStats = useMemo(
+    // sessionEnd is a cache key: a session just recorded must show up
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    () => (statsOpen ? readSandboxStats() : null), [statsOpen, sessionEnd],
+  );
+  const tagLabels = useMemo(
+    () => Object.fromEntries((facets?.tags ?? []).map((t) => [t.slug, t.label])),
+    [facets],
+  );
+
+  // ── Sandbox view ──────────────────────────────────────────────────────────
+
+  const inSandbox = mode === 'sandbox';
+  // The filter screen replaces the board until a session starts.
+  const showBoard = !inSandbox || session !== null;
+  const sessionRounds = session?.rounds ?? [];
+  const sessionSolved = sessionRounds.filter((r) => r.won).length;
+  // The round on screen, counted as soon as it's loaded
+  const roundNumber = sessionRounds.length + (roundId && !isOver ? 1 : 0);
+
   // ── Calendar ──────────────────────────────────────────────────────────────
 
   // All arithmetic is UTC — day indices are UTC epoch-days, and mixing in local
@@ -1153,41 +1380,65 @@ export default function DSAdle() {
                otherwise push the glyphs left of true centre */
             style={{ fontSize: 'clamp(22px, 6vw, 30px)', fontWeight: 800, letterSpacing: '.16em', marginRight: '-.16em', textTransform: 'uppercase', color: 'var(--text)', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >DSAdle</div>
-          {isOver && reveal ? (
-            <motion.button
-              {...pressable}
-              onClick={() => setEndOpen(true)}
-              title="Results"
-              aria-label="Show results"
-              style={{ justifySelf: 'end', marginRight: -9, width: HEADER_SLOT, height: HEADER_SLOT, border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            >
-              {/* Bar chart: same 16-unit grid, stroke and round caps as the calendar */}
-              <svg viewBox="0 0 16 16" width={18} height={18} style={{ display: 'block' }}>
-                <path d="M3 13.5 L3 9 M8 13.5 L8 3 M13 13.5 L13 6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
-              </svg>
-            </motion.button>
-          ) : (
-            <span style={{ justifySelf: 'end', width: HEADER_SLOT, height: HEADER_SLOT }} />
-          )}
+          {/* Always there: opens your overall stats. The post-game popup is
+              reached from the end-of-game card instead. */}
+          <motion.button
+            {...pressable}
+            onClick={() => setStatsOpen(true)}
+            title="Statistics"
+            aria-label="Statistics"
+            style={{ justifySelf: 'end', marginRight: -9, width: HEADER_SLOT, height: HEADER_SLOT, border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            {/* Bar chart: same 16-unit grid, stroke and round caps as the calendar */}
+            <svg viewBox="0 0 16 16" width={18} height={18} aria-hidden="true" style={{ display: 'block' }}>
+              <path d="M3 13.5 L3 9 M8 13.5 L8 3 M13 13.5 L13 6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+            </svg>
+          </motion.button>
         </div>
       </div>
 
       {/* ── Main content ── */}
       <div style={{ ...contentColumn, paddingTop: SECTION_GAP, paddingBottom: 'clamp(32px, 9vw, 56px)' }}>
 
-        {/* Nav row */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'clamp(11px, 3.2vw, 12px)', color: 'var(--text-muted)', marginBottom: 8 }}>
-          <motion.button {...pressable} onClick={() => navigate(-1)} disabled={dayIdx <= LAUNCH_DAY} style={{ ...navBtnStyle, marginLeft: -8 }}>‹ Prev</motion.button>
-          {/* Takes the slack so the label centres and wraps instead of
-              colliding with the arrows on a narrow screen */}
-          <div style={{ flex: 1, minWidth: 0, textAlign: 'center', fontWeight: 600 }}>{dateLabel} · {attemptsLeft} guesses left</div>
-          <motion.button {...pressable} onClick={() => navigate(1)} disabled={offset >= 0} style={{ ...navBtnStyle, marginRight: -8 }}>Next ›</motion.button>
-        </div>
+        {/* Nav row: day navigation, or the session bar in the sandbox */}
+        {!inSandbox ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'clamp(11px, 3.2vw, 12px)', color: 'var(--text-muted)', marginBottom: 8 }}>
+            <motion.button {...pressable} onClick={() => navigate(-1)} disabled={dayIdx <= LAUNCH_DAY} style={{ ...navBtnStyle, marginLeft: -8 }}>‹ Prev</motion.button>
+            {/* Takes the slack so the label centres and wraps instead of
+                colliding with the arrows on a narrow screen */}
+            <div style={{ flex: 1, minWidth: 0, textAlign: 'center', fontWeight: 600 }}>{dateLabel} · {attemptsLeft} guesses left</div>
+            <motion.button {...pressable} onClick={() => navigate(1)} disabled={offset >= 0} style={{ ...navBtnStyle, marginRight: -8 }}>Next ›</motion.button>
+          </div>
+        ) : session && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <div style={{ minWidth: 0, fontSize: 'clamp(11px, 3.2vw, 12px)', fontWeight: 700, color: 'var(--text-muted)' }}>
+                <span style={{ textTransform: 'uppercase', letterSpacing: '.06em' }}>Sandbox</span>
+                {' · '}{filterLabel(session.filter, tagLabels)}
+              </div>
+              <motion.button {...pressable} onClick={endSession} style={{ ...navBtnStyle, marginRight: -8, fontSize: 12, fontWeight: 700, textDecoration: 'underline' }}>End session</motion.button>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '9px 12px', border: '1px solid var(--border)', borderRadius: 3, fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>
+              <span>
+                {roundNumber > 0 ? `Round ${roundNumber}` : 'Round'} · {sessionSolved} of {sessionRounds.length} solved
+                {roundId && !isOver ? ` · ${attemptsLeft} left` : ''}
+              </span>
+              <span role="img" aria-label={`${sessionSolved} of ${sessionRounds.length} rounds solved`} style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 4, maxWidth: '55%' }}>
+                {sessionRounds.map((r, i) => (
+                  <span key={i} style={{ width: 12, height: 12, borderRadius: 2, background: r.won ? 'var(--accent-won)' : 'var(--accent-lost)' }} />
+                ))}
+                {roundId && !isOver && <span style={{ width: 12, height: 12, borderRadius: 2, boxSizing: 'border-box', border: '1px dashed var(--border-strong)' }} />}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Subtitle */}
-        <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--text-muted)', marginBottom: SECTION_GAP, lineHeight: 1.4 }}>
-          Guess the data structure or algorithm.<br />A new clue unlocks with every guess.
-        </div>
+        {showBoard && (
+          <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--text-muted)', marginBottom: SECTION_GAP, lineHeight: 1.4 }}>
+            Guess the data structure or algorithm.<br />A new clue unlocks with every guess.
+          </div>
+        )}
 
         {/* Error and cold-start notice share one slot so they can't stack. No Retry
             while waking: a second request arrives no sooner, and the timeout in
@@ -1202,11 +1453,11 @@ export default function DSAdle() {
               border: `2px solid ${error ? 'var(--accent-lost)' : 'var(--border)'}`,
             }}
           >
-            {error ?? `${offset === 0 ? "Grabbing today's DSAdle" : "Grabbing that day's DSAdle"}\u2026 it naps when nobody's playing, so this can take up to a minute.`}
+            {error ?? `${inSandbox ? 'Grabbing a puzzle' : offset === 0 ? "Grabbing today's DSAdle" : "Grabbing that day's DSAdle"}\u2026 it naps when nobody's playing, so this can take up to a minute.`}
             {error && (
               <motion.button
                 {...pressable}
-                onClick={() => setRetryTick((t) => t + 1)}
+                onClick={retry}
                 style={{ display: 'block', margin: '10px auto 0', fontSize: 12, fontWeight: 700, color: 'var(--on-accent)', background: 'var(--accent-lost)', border: 'none', borderRadius: 3, padding: '7px 14px', cursor: 'pointer' }}
               >Retry</motion.button>
             )}
@@ -1215,7 +1466,7 @@ export default function DSAdle() {
 
         {/* No puzzle for this day: neutral, not an error, and no Retry since
             asking again won't schedule one. Points at the archive instead. */}
-        {noPuzzle && !error && (
+        {noPuzzle && !error && !inSandbox && (
           <div
             aria-live="polite"
             style={{
@@ -1230,12 +1481,24 @@ export default function DSAdle() {
             New puzzles are on the way. In the meantime, catch up on past days in the archive.
             <motion.button
               {...pressable}
-              onClick={() => { setSideOpen(true); setSideView('archive'); }}
+              onClick={openArchive}
               style={{ display: 'block', margin: '12px auto 0', fontSize: 13, fontWeight: 700, color: 'var(--btn-fg)', background: 'var(--btn-bg)', border: 'none', borderRadius: 3, padding: '9px 16px', cursor: 'pointer' }}
             >Play the archive</motion.button>
           </div>
         )}
 
+        {/* Sandbox filter screen, in place of the board */}
+        {!showBoard && (
+          <SandboxFilters
+            facets={facets}
+            filter={sandboxFilter}
+            onChange={setSandboxFilter}
+            onStart={() => startSession(sandboxFilter)}
+            starting={loading}
+          />
+        )}
+
+        {showBoard && (<>
         {/* Clue cards */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'clamp(6px, 2vw, 8px)', marginBottom: SECTION_GAP }}>
           {clues.map((c, i) => (
@@ -1301,8 +1564,8 @@ export default function DSAdle() {
             transition={reduceMotion ? INSTANT : EASE_OUT}
             style={{ position: 'relative', textAlign: 'center', padding: '20px clamp(12px, 4vw, 16px)', border: '2px solid var(--border)', borderRadius: 3, marginBottom: SECTION_GAP }}
           >
-            {/* Second way back into the results popup, beside the header icon */}
-            <motion.button
+            {/* The way back into the post-game results popup (daily and archive only) */}
+            {!inSandbox && <motion.button
               {...pressable}
               onClick={() => setEndOpen(true)}
               title="Results"
@@ -1312,7 +1575,12 @@ export default function DSAdle() {
               <svg viewBox="0 0 16 16" width={16} height={16} style={{ display: 'block' }}>
                 <path d="M3 13.5 L3 9 M8 13.5 L8 3 M13 13.5 L13 6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
               </svg>
-            </motion.button>
+            </motion.button>}
+            {inSandbox && (
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: won ? 'var(--accent-won)' : 'var(--accent-lost)', marginBottom: 6 }}>
+                {won ? `Solved in ${results.findIndex(Boolean) + 1}` : 'Out of guesses'}{roundDifficulty ? ` · ${roundDifficulty}` : ''}
+              </div>
+            )}
             {/* Side padding clears the icon so a long name can't run under it */}
             <div style={{ fontSize: 'clamp(20px, 5.5vw, 24px)', fontWeight: 800, color: 'var(--text)', paddingInline: 32 }}>{reveal.name}</div>
             <div style={{ fontSize: 13, color: 'var(--text-soft)', marginTop: 8, lineHeight: 1.5 }}>{reveal.description}</div>
@@ -1322,6 +1590,20 @@ export default function DSAdle() {
               onClick={() => openModal('over')}
               style={{ marginTop: 14, fontSize: 13, fontWeight: 700, color: 'var(--btn-fg)', background: 'var(--btn-bg)', border: 'none', borderRadius: 3, padding: '10px 18px', cursor: 'pointer' }}
             >⟨ ⟩ View implementation</motion.button>
+            {inSandbox && session && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                <motion.button
+                  {...pressableRow}
+                  onClick={() => loadRound(session)}
+                  style={{ flex: 1, minHeight: 46, fontSize: 14, fontWeight: 800, color: 'var(--btn-fg)', background: 'var(--btn-bg)', border: 'none', borderRadius: 3, cursor: 'pointer' }}
+                >Next round ›</motion.button>
+                <motion.button
+                  {...pressableRow}
+                  onClick={endSession}
+                  style={{ flex: 1, minHeight: 46, fontSize: 14, fontWeight: 700, color: 'var(--text)', background: 'transparent', border: '2px solid var(--border-strong)', borderRadius: 3, cursor: 'pointer' }}
+                >End session</motion.button>
+              </div>
+            )}
           </motion.div>
         )}
 
@@ -1372,6 +1654,7 @@ export default function DSAdle() {
             >{submitting ? '…' : 'Guess'}</motion.button>
           </div>
         )}
+        </>)}
       </div>
 
       {/* ── Results popup ── */}
@@ -1526,6 +1809,24 @@ export default function DSAdle() {
         )}
       </AnimatePresence>
 
+      {/* ── Global stats and sandbox session summary ── */}
+      <GlobalStatsModal
+        open={statsOpen}
+        onClose={() => setStatsOpen(false)}
+        daily={globalDaily}
+        sandbox={sandboxStats ?? { sessions: 0, rounds: 0, solved: 0, best: [] }}
+        tagLabels={tagLabels}
+      />
+      <SessionEndModal
+        summary={sessionEnd?.summary ?? null}
+        rank={sessionEnd?.rank ?? null}
+        rounds={sessionEnd?.rounds ?? []}
+        tagLabels={tagLabels}
+        onClose={() => setSessionEnd(null)}
+        onPlayAgain={() => { const f = sessionEnd?.summary.filter; setSessionEnd(null); if (f) startSession(f); }}
+        onChangeFilters={() => { const f = sessionEnd?.summary.filter; setSessionEnd(null); if (f) setSandboxFilter(f); }}
+      />
+
       {/* ── Code modal ── */}
       <AnimatePresence custom={exitMode}>
         {modalOpen && (
@@ -1628,6 +1929,20 @@ export default function DSAdle() {
                       <span>Archive</span>
                       <span style={{ color: 'var(--text-muted)' }}>›</span>
                     </motion.div>
+                    <motion.button
+                      {...pressableRow}
+                      type="button"
+                      onClick={openSandbox}
+                      aria-current={inSandbox ? 'page' : undefined}
+                      className="dsadle-hover-bg"
+                      style={{ width: '100%', border: 'none', borderBottom: '1px solid var(--divider)', background: inSandbox ? 'var(--surface-hi)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: `14px ${SIDE_PAD}`, cursor: 'pointer', textAlign: 'left', fontFamily: FONT, color: 'var(--text)' }}
+                    >
+                      <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <span style={{ fontSize: 15, fontWeight: 600 }}>Sandbox</span>
+                        <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-muted)' }}>Practice past puzzles by type</span>
+                      </span>
+                      <span style={{ color: 'var(--text-muted)' }}>›</span>
+                    </motion.button>
                   </motion.div>
                 ) : (
                   <motion.div

@@ -23,6 +23,7 @@ from pathlib import Path
 from pydantic import ConfigDict, ValidationError
 
 from schemas import QuestionCreate
+from tags import TAGS
 
 SEED_FILE = Path(__file__).resolve().parent / "seed_data.json"
 
@@ -169,6 +170,21 @@ def validate(raw: object, today: date | None = None) -> Report:
                 f"{folded[key]!r} and {row.name!r} differ only by case — both are guessable"
             )
         folded[key] = row.name
+
+    # ── tags (the vocabulary itself is enforced by the schema) ────────────
+    for row in r.rows:
+        if len(set(row.tags)) != len(row.tags):
+            r.warnings.append(f"{row.name!r} lists a tag twice: {row.tags}")
+    tag_counts: dict[str, int] = {}
+    for row in r.rows:
+        for t in set(row.tags):
+            tag_counts[t] = tag_counts.get(t, 0) + 1
+    unused = [t for t in TAGS if t not in tag_counts]
+    r.infos.append(
+        "tags: " + ", ".join(f"{t} {n}" for t, n in sorted(tag_counts.items(), key=lambda kv: -kv[1]))
+    )
+    if unused:
+        r.infos.append(f"tags with no questions yet: {', '.join(unused)}")
 
     # ── answer leaks ──────────────────────────────────────────────────────
     for row in r.rows:
