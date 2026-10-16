@@ -174,8 +174,11 @@ const MODAL_HEADER_STYLE: CSSProperties = {
   background: '#2a2a30', borderBottom: '1px solid #3a3a42', flexShrink: 0,
 };
 
+// Paints its own background and fills the box: the box's `layout` scale can lag
+// behind its children on iOS, and a transparent <pre> then spills code onto the page.
 const MODAL_PRE_STYLE: CSSProperties = {
   margin: 0, padding: 'clamp(14px, 4vw, 22px)', overflow: 'auto',
+  background: '#1e1e22', flex: '1 1 auto', minHeight: 0,
   fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace",
   fontSize: 'clamp(11px, 3vw, 12.5px)', lineHeight: 1.65, color: '#e6e6ea', whiteSpace: 'pre',
 };
@@ -1102,6 +1105,9 @@ export default function DSAdle() {
     height: modalExpanded ? '92dvh' : 'auto',
     maxHeight: modalExpanded ? '92dvh' : '82dvh',
     overflow: 'hidden',
+    // iOS Safari won't clip transformed children to a rounded overflow:hidden
+    // box without its own stacking context
+    isolation: 'isolate',
     display: 'flex',
     flexDirection: 'column',
     // Mounted but concealed while the animating copy scales in over the top
