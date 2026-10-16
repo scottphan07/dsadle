@@ -1925,8 +1925,11 @@ export default function DSAdle() {
                       <span>Today&apos;s Puzzle</span>
                       <span style={{ color: 'var(--text-muted)' }}>›</span>
                     </motion.div>
-                    <motion.div {...pressableRow} onClick={() => setSideView('archive')} className="dsadle-hover-bg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: `16px ${SIDE_PAD}`, cursor: 'pointer', borderBottom: '1px solid var(--divider)', fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
-                      <span>Archive</span>
+                    <motion.div {...pressableRow} onClick={() => setSideView('archive')} className="dsadle-hover-bg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: `14px ${SIDE_PAD}`, cursor: 'pointer', borderBottom: '1px solid var(--divider)', color: 'var(--text)' }}>
+                      <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <span style={{ fontSize: 15, fontWeight: 600 }}>Archive</span>
+                        <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-muted)' }}>Play previous days&apos; DSAdles</span>
+                      </span>
                       <span style={{ color: 'var(--text-muted)' }}>›</span>
                     </motion.div>
                     <motion.button
