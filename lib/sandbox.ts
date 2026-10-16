@@ -14,8 +14,13 @@ export const DIFFICULTY_WEIGHT: Record<Difficulty, number> = {
   Advanced: 3,
 };
 
-/** A session needs this many rounds before its score counts at full value. */
-export const FULL_SESSION_ROUNDS = 5;
+/** Most rounds in one session. A filter with fewer matches plays all of them. */
+export const MAX_SESSION_ROUNDS = 10;
+
+/** How many rounds a session with this many matching puzzles will have. */
+export function sessionLength(matches: number): number {
+  return Math.min(MAX_SESSION_ROUNDS, matches);
+}
 
 /** How many best sessions the stats keep. */
 export const BEST_KEPT = 3;
@@ -37,6 +42,8 @@ export type PendingRound = {
 
 export type ActiveSession = {
   filter: SandboxFilter;
+  /** Rounds this session will play: min(10, matching puzzles), fixed at the start. */
+  total: number;
   rounds: SandboxRoundResult[];
   pending: PendingRound | null;
   startedAt: number;
@@ -45,6 +52,8 @@ export type ActiveSession = {
 export type SessionSummary = {
   filter: SandboxFilter;
   rounds: number;
+  /** Rounds the session was set to play. Missing on sessions saved before the cap. */
+  total?: number;
   solved: number;
   /** 0–100, rounded. */
   accuracy: number;
@@ -86,8 +95,10 @@ export function settlePending(session: ActiveSession): ActiveSession {
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
 
-// accuracy × average difficulty weight × length factor, ×100 for display.
-// The length factor stops a lucky one-round session from topping the table.
+// accuracy × average difficulty weight × completion, ×100 for display.
+// Completion is rounds played over the session's own length, so finishing a
+// small filter (3 of 3) earns full credit, while ending a 10-round session after
+// one lucky round doesn't top the table.
 export function summarize(session: ActiveSession, endedAt = Date.now()): SessionSummary {
   const rounds = session.rounds.length;
   const solved = session.rounds.filter((r) => r.won).length;
@@ -95,14 +106,15 @@ export function summarize(session: ActiveSession, endedAt = Date.now()): Session
   const difficulty = rounds
     ? session.rounds.reduce((sum, r) => sum + DIFFICULTY_WEIGHT[r.difficulty], 0) / rounds
     : 0;
-  const lengthFactor = Math.min(1, rounds / FULL_SESSION_ROUNDS);
+  const completion = session.total > 0 ? Math.min(1, rounds / session.total) : 0;
   return {
     filter: session.filter,
     rounds,
+    total: session.total,
     solved,
     accuracy: Math.round(accuracy * 100),
     difficulty: Math.round(difficulty * 10) / 10,
-    score: Math.round(accuracy * difficulty * lengthFactor * 100),
+    score: Math.round(accuracy * difficulty * completion * 100),
     endedAt,
   };
 }
@@ -179,7 +191,12 @@ export function readActiveSession(): ActiveSession | null {
   if (isObj(v) && isFilter(v.filter) && Array.isArray(v.rounds) && v.rounds.every(isRound)
     && (v.pending === null || v.pending === undefined || isPending(v.pending))
     && typeof v.startedAt === 'number') {
-    return { ...(v as ActiveSession), pending: (v.pending as PendingRound | undefined) ?? null };
+    return {
+      ...(v as ActiveSession),
+      pending: (v.pending as PendingRound | undefined) ?? null,
+      // Sessions saved before the cap existed have no total
+      total: typeof v.total === 'number' && v.total > 0 ? v.total : MAX_SESSION_ROUNDS,
+    };
   }
   return null;
 }
@@ -201,8 +218,9 @@ export function readSandboxStats(): SandboxStats {
 export function recordSession(summary: SessionSummary): number | null {
   if (summary.rounds === 0) return null;
   const prev = readSandboxStats();
-  // Ties go to the earlier session: it got there first.
-  const best = [...prev.best, summary]
+  // A zero-score session (nothing solved) counts toward the totals but never
+  // takes a place on the board. Ties go to the earlier session: it got there first.
+  const best = [...prev.best, ...(summary.score > 0 ? [summary] : [])]
     .sort((a, b) => b.score - a.score || a.endedAt - b.endedAt)
     .slice(0, BEST_KEPT);
   writeJson(STATS_KEY, {

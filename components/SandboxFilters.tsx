@@ -3,10 +3,7 @@
 import { CSSProperties } from 'react';
 import { motion } from 'motion/react';
 import type { Difficulty, Facets, SandboxFilter } from '@/lib/api';
-import { DIFFICULTIES, matchesFilter } from '@/lib/sandbox';
-
-// Below this many matching puzzles, answers will repeat within a session.
-const FEW_MATCHES = 4;
+import { DIFFICULTIES, MAX_SESSION_ROUNDS, matchesFilter, sessionLength } from '@/lib/sandbox';
 
 const pressable = {
   whileHover: { scale: 1.03 },
@@ -48,6 +45,7 @@ export default function SandboxFilters({ facets, filter, onChange, onStart, star
   const tagCount = (slug: string) =>
     items.filter((it) => it.tags.includes(slug) && matchesFilter(it, { ...filter, tags: [] })).length;
   const matches = items.filter((it) => matchesFilter(it, filter)).length;
+  const rounds = sessionLength(matches);
 
   function toggle<K extends keyof SandboxFilter>(key: K, value: SandboxFilter[K][number]) {
     const cur = filter[key] as string[];
@@ -65,7 +63,7 @@ export default function SandboxFilters({ facets, filter, onChange, onStart, star
         <div style={{ ...sectionLabel }}>Sandbox</div>
         <h1 style={{ margin: '6px 0 0', fontSize: 'clamp(22px, 6vw, 26px)', fontWeight: 800, color: 'var(--text)' }}>Practice by type</h1>
         <p style={{ margin: '6px 0 0', fontSize: 13, lineHeight: 1.45, color: 'var(--text-muted)' }}>
-          Replay past puzzles as often as you like.<br />Today&apos;s and upcoming puzzles never appear here.
+          Play DSAdle by category using past puzzles,<br />up to {MAX_SESSION_ROUNDS} per session. Today&apos;s puzzle stays hidden.
         </p>
       </div>
 
@@ -124,14 +122,18 @@ export default function SandboxFilters({ facets, filter, onChange, onStart, star
 
       <section aria-live="polite" style={{ border: '2px solid var(--border)', borderRadius: 3, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
-          {facets ? `${matches} puzzle${matches === 1 ? '' : 's'} match` : 'Counting puzzles…'}
+          {!facets ? 'Counting puzzles…'
+            : matches === 0 ? 'No puzzles match'
+            : `${rounds}-round session`}
         </div>
-        <div style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--text-muted)' }}>Your guess list: {guessScope}.</div>
-        {facets && matches > 0 && matches < FEW_MATCHES && (
-          <div style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--text-soft)' }}>
-            Only a few puzzles match, so answers will repeat within a session. Widen the filter for more variety.
+        {facets && matches > 0 && (
+          <div style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--text-muted)' }}>
+            {matches > MAX_SESSION_ROUNDS
+              ? `${matches} puzzles match, so you'll get ${MAX_SESSION_ROUNDS} of them picked at random.`
+              : `${matches === 1 ? 'One puzzle matches' : `${matches} puzzles match`}, so you'll play ${matches === 1 ? 'it' : 'all of them'}.`}
           </div>
         )}
+        <div style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--text-muted)' }}>Your guess list: {guessScope}.</div>
       </section>
 
       <motion.button

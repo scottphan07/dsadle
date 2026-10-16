@@ -10,7 +10,7 @@ import {
 } from '@/lib/api';
 import {
   ActiveSession, SessionSummary,
-  filterLabel, readActiveSession, readSandboxStats, recordSession, saveActiveSession,
+  filterLabel, matchesFilter, sessionLength, readActiveSession, readSandboxStats, recordSession, saveActiveSession,
   settlePending, summarize,
 } from '@/lib/sandbox';
 import SandboxFilters from './SandboxFilters';
@@ -1038,9 +1038,14 @@ export default function DSAdle() {
     if (active) {
       // A round left mid-way (reload, closed tab) counts as a loss if it had guesses.
       const settled = settlePending(active);
+      setSandboxFilter(settled.filter);
+      if (settled.rounds.length >= settled.total) {
+        // Every round was already played (left on the last one): show the results.
+        finishSession(settled);
+        return;
+      }
       saveActiveSession(settled);
       setSession(settled);
-      setSandboxFilter(settled.filter);
       loadRound(settled);
     } else {
       setSession(null);
@@ -1080,7 +1085,13 @@ export default function DSAdle() {
   }
 
   function startSession(filter: SandboxFilter) {
-    const fresh: ActiveSession = { filter, rounds: [], pending: null, startedAt: Date.now() };
+    // Up to 10 rounds; a smaller filter plays every match once. The server picks
+    // each round at random from those not yet played (`exclude`), so a 10-round
+    // session over 60 matches is a random 10 of them, with no repeats.
+    const matches = (facets?.items ?? []).filter((it) => matchesFilter(it, filter)).length;
+    const total = sessionLength(matches);
+    if (total === 0) return;
+    const fresh: ActiveSession = { filter, total, rounds: [], pending: null, startedAt: Date.now() };
     setSandboxFilter(filter);
     setSession(fresh);
     saveActiveSession(fresh);
@@ -1089,7 +1100,10 @@ export default function DSAdle() {
 
   function endSession() {
     if (!session) return;
-    const settled = settlePending(session);
+    finishSession(settlePending(session));
+  }
+
+  function finishSession(settled: ActiveSession) {
     saveActiveSession(null);
     resetBoard();
     setSession(null);
@@ -1275,6 +1289,9 @@ export default function DSAdle() {
   const sessionSolved = sessionRounds.filter((r) => r.won).length;
   // The round on screen, counted as soon as it's loaded
   const roundNumber = sessionRounds.length + (roundId && !isOver ? 1 : 0);
+  const sessionTotal = session?.total ?? 0;
+  // The last round is done: the session ends instead of offering another.
+  const sessionDone = session !== null && sessionRounds.length >= sessionTotal;
 
   // ── Calendar ──────────────────────────────────────────────────────────────
 
@@ -1420,14 +1437,22 @@ export default function DSAdle() {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '9px 12px', border: '1px solid var(--border)', borderRadius: 3, fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>
               <span>
-                {roundNumber > 0 ? `Round ${roundNumber}` : 'Round'} · {sessionSolved} of {sessionRounds.length} solved
+                Round {Math.max(1, roundNumber)} of {sessionTotal} · {sessionSolved} solved
                 {roundId && !isOver ? ` · ${attemptsLeft} left` : ''}
               </span>
               <span role="img" aria-label={`${sessionSolved} of ${sessionRounds.length} rounds solved`} style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 4, maxWidth: '55%' }}>
-                {sessionRounds.map((r, i) => (
-                  <span key={i} style={{ width: 12, height: 12, borderRadius: 2, background: r.won ? 'var(--accent-won)' : 'var(--accent-lost)' }} />
-                ))}
-                {roundId && !isOver && <span style={{ width: 12, height: 12, borderRadius: 2, boxSizing: 'border-box', border: '1px dashed var(--border-strong)' }} />}
+                {/* One square per round: played ones filled, the current one dashed, the rest outlined */}
+                {Array.from({ length: sessionTotal }, (_, i) => {
+                  const r = sessionRounds[i];
+                  const current = !r && i === sessionRounds.length && roundId !== null && !isOver;
+                  return (
+                    <span key={i} style={{
+                      width: 12, height: 12, borderRadius: 2, boxSizing: 'border-box',
+                      background: r ? (r.won ? 'var(--accent-won)' : 'var(--accent-lost)') : 'transparent',
+                      border: r ? 'none' : current ? '1px dashed var(--text-muted)' : '1px solid var(--border)',
+                    }} />
+                  );
+                })}
               </span>
             </div>
           </div>
@@ -1592,16 +1617,24 @@ export default function DSAdle() {
             >⟨ ⟩ View implementation</motion.button>
             {inSandbox && session && (
               <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-                <motion.button
-                  {...pressableRow}
-                  onClick={() => loadRound(session)}
-                  style={{ flex: 1, minHeight: 46, fontSize: 14, fontWeight: 800, color: 'var(--btn-fg)', background: 'var(--btn-bg)', border: 'none', borderRadius: 3, cursor: 'pointer' }}
-                >Next round ›</motion.button>
-                <motion.button
-                  {...pressableRow}
-                  onClick={endSession}
-                  style={{ flex: 1, minHeight: 46, fontSize: 14, fontWeight: 700, color: 'var(--text)', background: 'transparent', border: '2px solid var(--border-strong)', borderRadius: 3, cursor: 'pointer' }}
-                >End session</motion.button>
+                {sessionDone ? (
+                  <motion.button
+                    {...pressableRow}
+                    onClick={endSession}
+                    style={{ flex: 1, minHeight: 46, fontSize: 14, fontWeight: 800, color: 'var(--btn-fg)', background: 'var(--btn-bg)', border: 'none', borderRadius: 3, cursor: 'pointer' }}
+                  >See session results ›</motion.button>
+                ) : (<>
+                  <motion.button
+                    {...pressableRow}
+                    onClick={() => loadRound(session)}
+                    style={{ flex: 1, minHeight: 46, fontSize: 14, fontWeight: 800, color: 'var(--btn-fg)', background: 'var(--btn-bg)', border: 'none', borderRadius: 3, cursor: 'pointer' }}
+                  >Next round ›</motion.button>
+                  <motion.button
+                    {...pressableRow}
+                    onClick={endSession}
+                    style={{ flex: 1, minHeight: 46, fontSize: 14, fontWeight: 700, color: 'var(--text)', background: 'transparent', border: '2px solid var(--border-strong)', borderRadius: 3, cursor: 'pointer' }}
+                  >End session</motion.button>
+                </>)}
               </div>
             )}
           </motion.div>

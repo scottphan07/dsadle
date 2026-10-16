@@ -255,11 +255,15 @@ export function SessionEndModal({ summary, rank, rounds, tagLabels, onClose, onP
             {rank !== null && <RankBadge rank={rank} />}
             <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <span style={{ fontSize: 14, fontWeight: 700 }}>
-                {rank === 1 ? 'New best session' : rank !== null ? `#${rank} of your best sessions` : 'Not in your top 3 this time'}
+                {rank === 1 ? 'New best session'
+                  : rank !== null ? `#${rank} of your best sessions`
+                  : summary.score === 0 ? 'Solve a round to score' : 'Not in your top 3 this time'}
               </span>
               <span style={{ fontSize: 12, lineHeight: 1.4, color: 'var(--text-muted)' }}>
                 {summary.accuracy}% accuracy × difficulty {summary.difficulty.toFixed(1)}
-                {summary.rounds < 5 ? ` × ${summary.rounds}/5 rounds (play 5+ for full credit)` : ''}
+                {summary.total && summary.rounds < summary.total
+                  ? ` × ${summary.rounds}/${summary.total} rounds (finish the session for full credit)`
+                  : ''}
               </span>
             </span>
           </div>
