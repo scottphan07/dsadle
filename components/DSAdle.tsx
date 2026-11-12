@@ -623,7 +623,7 @@ export default function DSAdle() {
   const [openedFrom, setOpenedFrom] = useState<'card' | 'over'>('card');
   const [genie, setGenie] = useState<GenieState | null>(null);
   const [pendingGenieOpen, setPendingGenieOpen] = useState(false);
-  const [calOpen, setCalOpen] = useState(false);
+  const [calOpen, setCalOpen] = useState(true);
   // Set on mount rather than at declaration — todayIndex() is client-only
   const [calMonth, setCalMonth] = useState<{ y: number; m: number } | null>(null);
   // The lazy initializer needs no mount gate: page.tsx loads this with ssr:false,
