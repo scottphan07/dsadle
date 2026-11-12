@@ -1555,16 +1555,16 @@ export default function DSAdle() {
                     <TrafficLight color="#ff5f57" glyphColor="#4d0000" hoverClass="dsadle-hover-red" title="Close" visible={lightsHover} onClick={() => closeModal('instant')}>
                       <path d="M3.9 3.9 L8.1 8.1 M8.1 3.9 L3.9 8.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" fill="none" />
                     </TrafficLight>
-                    <TrafficLight color="#febc2e" glyphColor="#995700" hoverClass="dsadle-hover-yellow" title="Minimize" visible={lightsHover} onClick={minimizeModal}>
+                    <TrafficLight color="#febc2e" glyphColor="#6b3d00" hoverClass="dsadle-hover-yellow" title="Minimize" visible={lightsHover} onClick={minimizeModal}>
                       <path d="M3.4 6 L8.6 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" fill="none" />
                     </TrafficLight>
-                    <TrafficLight color="#28c840" glyphColor="#006500" hoverClass="dsadle-hover-green" title={modalExpanded ? 'Restore' : 'Expand'} visible={lightsHover} onClick={() => setModalExpanded((v) => !v)}>
+                    <TrafficLight color="#28c840" glyphColor="#004300" hoverClass="dsadle-hover-green" title={modalExpanded ? 'Restore' : 'Expand'} visible={lightsHover} onClick={() => setModalExpanded((v) => !v)}>
                       {modalExpanded ? (
                         /* Restore — right angles meet at the centre, tips pointing inward */
-                        <path d="M5.4 5.4 L5.4 3.1 L3.1 5.4 Z M6.6 6.6 L6.6 8.9 L8.9 6.6 Z" fill="currentColor" />
+                        <path d="M5.6 5.6 L5.8 1.4 L1.4 5.8 Z M6.4 6.4 L6.2 10.6 L10.6 6.2 Z" fill="currentColor" />
                       ) : (
                         /* Expand — right angles at the outer corners, tips pointing outward */
-                        <path d="M3.4 3.4 L8.0 3.4 L3.4 8.0 Z M8.6 8.6 L4.0 8.6 L8.6 4.0 Z" fill="currentColor" />
+                        <path d="M3.1 3.1 L7.9 3.1 L3.1 7.9 Z M8.9 8.9 L4.1 8.9 L8.9 4.1 Z" fill="currentColor" />
                       )}
                     </TrafficLight>
                     <span style={MODAL_FILENAME_STYLE}>example_implementation.py</span>
